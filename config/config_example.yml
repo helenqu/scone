@@ -1,0 +1,40 @@
+### FILE LOCATIONS ###
+metadata_paths: # paths to metadata files
+  - "/path/to/data/metadata_0.csv"
+  - "/path/to/data/metadata_1.csv"
+lcdata_paths: # paths to observation data files
+  - "~/path/to/data/lcdata_0.csv"
+  - "~/path/to/data/lcdata_1.csv"
+ids_path: "/path/to/output/dir/0_5_Ia_split_heatmaps_ids.hdf5" # path to ids file (output of data_cuts.py), will be in output_path
+output_path: "/path/to/output/dir" # location of desired output directory for ids file + heatmaps
+
+### HEATMAP SIZE PARAMS ###
+# HEATMAP HEIGHT: wavelength_range / wavelength_interval. wavelength_range=7100 angstroms (3000 -> 10100), set in create_heatmaps.py
+# HEATMAP WIDTH: mjd_range / mjd_interval. mjd_range=180 (peak_mjd-50 -> peak_mjd+130), set in create_heatmaps.py
+wavelength_interval: 221.875
+mjd_interval: 1.0
+
+### CLASS BALANCING ###
+# 0.5 for class-balanced binary split
+# "categorical" for class-balanced categorical split
+Ia_fraction: 0.5 
+
+### SPECIFIC TO CATEGORICAL SPLIT ###
+# categorical_min_per_type: min number of SNe per type; types with fewer are discarded
+# categorical_max_per_type: max number of SNe per type; this number of SNe will be randomly chosen if a type has more
+categorical_min_per_type: 200
+categorical_max_per_type: 2000
+
+### SAVING INTERMEDIATE RESULTS IN DATA_CUTS.PY ###
+save_to_json: True # save results of apply_cuts as json file (helpful if apply_cuts is time-intensive)
+from_json: False # from_json: True will skip apply_cuts and instead read the results from json file (helpful if data_cuts.py died after apply_cuts but before finishing)
+
+# mapping between numerical type ID and a name string
+sn_type_id_to_name:
+  42: "SNII"
+  52: "SNIax"
+  62: "SNIbc"
+  67: "SNIa-91bg"
+  64: "KN"
+  90: "SNIa"
+  95: "SLSN-1"

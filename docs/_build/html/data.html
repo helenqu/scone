@@ -1,0 +1,125 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lightcurve Data Format &#8212; CatchyName 0 documentation</title>
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
+    <script id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/doctools.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="lightcurve-data-format">
+<span id="data-format"></span><h1>Lightcurve Data Format<a class="headerlink" href="#lightcurve-data-format" title="Permalink to this headline">¶</a></h1>
+<p>Lightcurve data that will be used to create heatmaps for CatchyName must be separated into two types of CSV files: <em>metadata</em> and <em>observation data</em>.
+Multiple metadata and observation data files are acceptable (and preferred for large datasets), but there should be a 1-1 correspondence between metadata and observation data files, i.e. all objects in a particular metadata file should correspond to objects in a single observation file.</p>
+<div class="section" id="metadata-format">
+<span id="metadata"></span><h2>Metadata Format<a class="headerlink" href="#metadata-format" title="Permalink to this headline">¶</a></h2>
+<p>Metadata is expected in CSV format with a minimum of the following columns:
+* <code class="docutils literal notranslate"><span class="pre">object_id</span></code>: a unique integer ID for each supernova that will be used to cross-reference with the observation data
+* <code class="docutils literal notranslate"><span class="pre">true_target</span></code>: the true type of the supernova, typically an integer (i.e. SNANA uses 101 for SNIa, 122 for SNII, etc)
+* <code class="docutils literal notranslate"><span class="pre">true_peakmjd</span></code>: the time of peak flux for the supernova
+* <code class="docutils literal notranslate"><span class="pre">mwebv</span></code>: milky way extinction</p>
+</div>
+<div class="section" id="observation-data-format">
+<span id="observation-data"></span><h2>Observation Data Format<a class="headerlink" href="#observation-data-format" title="Permalink to this headline">¶</a></h2>
+<p>Observation data is expected in CSV format with a minimum of the following columns:
+* <code class="docutils literal notranslate"><span class="pre">object_id</span></code>: a unique integer ID for each supernova that will be used to cross-reference with the observation data
+* <code class="docutils literal notranslate"><span class="pre">mjd</span></code>: the time of the observation, in Modified Julian Days (MJD)
+* <code class="docutils literal notranslate"><span class="pre">passband</span></code>: an integer corresponding to the filter used for the observation (i.e. 0 for <em>u</em>, 1 for <em>g</em>, etc)
+* <code class="docutils literal notranslate"><span class="pre">flux</span></code>: the observed flux
+* <code class="docutils literal notranslate"><span class="pre">flux_err</span></code>: the error on the observed flux
+* <code class="docutils literal notranslate"><span class="pre">detected_bool</span></code>: whether the observation counts as a “detection” for the supernova</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>NOTE: we used S/N &gt; 5 as the detection threshold for each observation</p></li>
+</ul>
+</div></blockquote>
+</div>
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">CatchyName</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2021, Helen Qu.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 3.4.3</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+      |
+      <a href="_sources/data.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

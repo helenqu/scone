@@ -1,0 +1,137 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quick Start Guide &#8212; CatchyName 0 documentation</title>
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
+    <script id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/doctools.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="quick-start-guide">
+<span id="quick-start"></span><h1>Quick Start Guide<a class="headerlink" href="#quick-start-guide" title="Permalink to this headline">¶</a></h1>
+<div class="section" id="environment">
+<span id="id1"></span><h2>Environment<a class="headerlink" href="#environment" title="Permalink to this headline">¶</a></h2>
+<p>TODO: make this into a file you can install from
+np/scipy/pandas/george/functools/astropy/h5py/tensorflow 2.2+</p>
+</div>
+<div class="section" id="installation">
+<span id="id2"></span><h2>Installation<a class="headerlink" href="#installation" title="Permalink to this headline">¶</a></h2>
+<p>TODO</p>
+</div>
+<div class="section" id="id3">
+<h2>Data Formatting<a class="headerlink" href="#id3" title="Permalink to this headline">¶</a></h2>
+<p>Make sure your data is in the right format for heatmap creation: <span class="xref std std-doc">data.rst</span></p>
+</div>
+<div class="section" id="setting-up-the-config-file">
+<h2>Setting Up the Config File<a class="headerlink" href="#setting-up-the-config-file" title="Permalink to this headline">¶</a></h2>
+<p>The configuration for heatmap creation is fully specified by a YAML file. TODO: make example yml file, make quality cuts a part of config</p>
+</div>
+<div class="section" id="id4">
+<h2>Create Heatmaps<a class="headerlink" href="#id4" title="Permalink to this headline">¶</a></h2>
+<dl class="simple">
+<dt>First, we remove low quality lightcurves and balance classes using the <code class="docutils literal notranslate"><span class="pre">data_cuts.py</span></code> script::</dt><dd><p>$ python data_cuts.py –config_path /path/to/your/config.yml</p>
+</dd>
+</dl>
+<p><code class="docutils literal notranslate"><span class="pre">data_cuts.py</span></code> writes a file of object IDs that passed quality cuts and class-balancing. These are the IDs of the supernovae that we’ll be making heatmaps for next.
+<strong>Note:</strong> this can be time-intensive for large datasets, so run this in a <code class="docutils literal notranslate"><span class="pre">screen</span></code> session or via a workload manager, such as Slurm.</p>
+<dl>
+<dt>Next, create the heatmaps::</dt><dd><p>$ python create_heatmaps_tfrecord.py –config_path /path/to/your/config.yml</p>
+</dd>
+<dt>Note that if there are multiple metadata/observation data files, an <code class="docutils literal notranslate"><span class="pre">index</span></code> argument will have to be specified. Automatically looping over a number of indices can easily be done with a shellscript such as this one for 100 metadata/observation data file pairs::</dt><dd><p>for i in {0..99}
+do</p>
+<blockquote>
+<div><p>python create_heatmaps.py –config_path /path/to/your/config.yml –index $i</p>
+</div></blockquote>
+<p>done</p>
+</dd>
+</dl>
+</div>
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">CatchyName</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2021, Helen Qu.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 3.4.3</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+      |
+      <a href="_sources/quickstart.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>
