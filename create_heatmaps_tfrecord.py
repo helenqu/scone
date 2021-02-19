@@ -118,12 +118,12 @@ def build_gp(guess_length_scale, sn_data, bands):
 
     return gaussian_process
 
-def get_predictions_heatmap(gp, peak_mjd, mjd_interval, wavelength_interval, milkyway_ebv):
+def get_predictions_heatmap(gp, peak_mjd, mjd_bins, wavelength_bins, milkyway_ebv):
     #This makes a new array of time which has 0.5 day cadence
-    times = np.arange(peak_mjd-50, peak_mjd+130, mjd_interval)
+    times = np.linspace(peak_mjd-50, peak_mjd+130, mjd_bins)
 
     #This makes a new array in wavelength space which has a cadence of 20 Ang
-    wavelengths = np.arange(3000.0, 10100.0, wavelength_interval)
+    wavelengths = np.linspace(3000.0, 10100.0, wavelength_bins)
     ext = get_extinction(milkyway_ebv, wavelengths)
     ext = np.tile(np.expand_dims(ext, axis=1), len(times))
 
@@ -171,10 +171,7 @@ def _int64_feature(value):
 
 def image_example(image_string, label, id):
     feature = {
-	'height': _int64_feature(71),
-	'width': _int64_feature(180),
-	'depth': _int64_feature(2),
-        'id': _int64_feature(id),
+    'id': _int64_feature(id),
 	'label': _int64_feature(label),
 	'image_raw': _bytes_feature(image_string),
     }
@@ -197,8 +194,8 @@ LCDATA_PATH = config["lcdata_paths"][args.index]
 IDS_PATH = config["ids_path"]
 OUTPUT_PATH = config["output_path"]
 SN_TYPE_ID_MAP = config["sn_type_id_to_name"]
-WAVELENGTH_INTERVAL = config["wavelength_interval"]
-MJD_INTERVAL = config["mjd_interval"]
+WAVELENGTH_BINS = config["num_wavelength_bins"]
+MJD_BINS = config["num_mjd_bins"]
 
 print("writing to {}".format(OUTPUT_PATH), flush=True)
 
@@ -219,6 +216,8 @@ if not os.path.exists(OUTPUT_PATH):
 done_by_type = {}
 removed_by_type = {}
 done_ids = []
+
+type_to_int_label = {}
 
 with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(OUTPUT_PATH, args.index)) as writer:
     for i, sn_id in enumerate(lcdata_ids):
@@ -276,13 +275,22 @@ with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(OUTPUT_PATH, args.ind
         milkyway_ebv = sn_metadata['mwebv'].iloc[0]
         z = sn_metadata['true_z'].iloc[0]
 
-        predictions, prediction_errs = get_predictions_heatmap(gp, peak_mjd, MJD_INTERVAL, WAVELENGTH_INTERVAL, milkyway_ebv)
+        predictions, prediction_errs = get_predictions_heatmap(gp, peak_mjd, MJD_BINS, WAVELENGTH_BINS, milkyway_ebv)
         heatmap = np.dstack((predictions, prediction_errs))
-        writer.write(image_example(heatmap.flatten().tobytes(), sn_metadata.true_target.iloc[0], sn_id))
+
+        if sn_name not in type_to_int_label:
+            if sn_name == "SNIa" or sn_name == "Ia":
+                type_to_int_label[sn_name] = 0
+            else:
+                type_to_int_label[sn_name] = (max(type_to_int_label.values) if len(type_to_int_label.values) > 0 else 0) + 1
+
+        writer.write(image_example(heatmap.flatten().tobytes(), type_to_int_label[sn_name], sn_id))
         done_ids.append(sn_id)
         done_by_type[sn_name] = 1 if sn_name not in done_by_type else done_by_type[sn_name] + 1
 
 with open("{}/done.log".format(OUTPUT_PATH), "a+") as f:
+    f.write("type name mapping to integer label used for classification: {}".format(type_to_int_label))
+    # TODO: fix the output to done.log
     f.write(str(done_by_type).replace("'", ""))
     total = 0
     for v in done_by_type.values():

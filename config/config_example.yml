@@ -11,8 +11,8 @@ output_path: "/path/to/output/dir" # location of desired output directory for id
 ### HEATMAP SIZE PARAMS ###
 # HEATMAP HEIGHT: wavelength_range / wavelength_interval. wavelength_range=7100 angstroms (3000 -> 10100), set in create_heatmaps.py
 # HEATMAP WIDTH: mjd_range / mjd_interval. mjd_range=180 (peak_mjd-50 -> peak_mjd+130), set in create_heatmaps.py
-wavelength_interval: 221.875
-mjd_interval: 1.0
+num_wavelength_bins: 32
+num_mjd_bins: 180
 
 ### CLASS BALANCING ###
 # 0.5 for class-balanced binary split
@@ -38,3 +38,9 @@ sn_type_id_to_name:
   64: "KN"
   90: "SNIa"
   95: "SLSN-1"
+
+categorical: False
+batch_size: 32
+num_epochs: 400
+train_proportion: 0.8
+val_proportion: 0.1
