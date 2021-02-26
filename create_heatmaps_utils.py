@@ -11,6 +11,7 @@ import tensorflow as tf
 import yaml
 import argparse
 import h5py
+import sys
 
 # HELPER FUNCTIONS
 def get_extinction(ebv, wave):
@@ -134,27 +135,6 @@ def get_predictions_heatmap(gp, peak_mjd, mjd_bins, wavelength_bins, milkyway_eb
 
     return ext_corrected_predictions, prediction_uncertainties
 
-def get_augmented_predictions_heatmap(gp, peak_mjd, mjd_interval, wavelength_interval, z, milkyway_ebv):
-    new_z = random.uniform(0.5*z, 2*z)
-    augment_factor = (1+new_z)/(1+z)
-
-    augmented_mjd_start = peak_mjd-(50*augment_factor)
-    augmented_mjd_end = peak_mjd+(130*augment_factor)
-    augmented_wavelength_start = 6550-(3550*augment_factor)
-    augmented_wavelength_end = 6550+(3550*augment_factor)
-    
-    times = np.linspace(augmented_mjd_start, augmented_mjd_end, num=180)
-    wavelengths = np.linspace(augmented_wavelength_start, augmented_wavelength_end, num=71)
-    ext = get_extinction(milkyway_ebv, wavelengths)
-    ext = np.tile(np.expand_dims(ext, axis=1), len(times))
-
-    time_wavelength_grid = np.transpose([np.tile(times, len(wavelengths)), np.repeat(wavelengths, len(times))])
-    predictions, prediction_vars = gp(time_wavelength_grid, return_var=True)
-    ext_corrected_predictions = np.array(predictions).reshape(len(wavelengths), len(times)) + ext
-    prediction_uncertainties = np.sqrt(prediction_vars).reshape(len(wavelengths), len(times))
-
-    return ext_corrected_predictions, prediction_uncertainties
-
 def _bytes_feature(value):
     """Returns a bytes_list from a string / byte."""
     if isinstance(value, type(tf.constant(0))):
@@ -186,16 +166,20 @@ parser.add_argument('--index', type=int, default=0, help='integer job index / sl
 args = parser.parse_args()
 
 # LOAD CONFIG
-with open(args.config_path, "r") as cfgfile:
-    config = yaml.load(cfgfile)
+def load_config(config_path):
+    with open(config_path, "r") as cfgfile:
+        config = yaml.load(cfgfile)
+    return config
 
+config = load_config(args.config_path)
 METADATA_PATH = config["metadata_paths"][args.index]
 LCDATA_PATH = config["lcdata_paths"][args.index]
-IDS_PATH = config["ids_path"]
 OUTPUT_PATH = config["output_path"]
 SN_TYPE_ID_MAP = config["sn_type_id_to_name"]
 WAVELENGTH_BINS = config["num_wavelength_bins"]
 MJD_BINS = config["num_mjd_bins"]
+if "ids_path" in config:
+    IDS_PATH = config["ids_path"]
 
 print("writing to {}".format(OUTPUT_PATH), flush=True)
 
@@ -209,6 +193,7 @@ ids_file = h5py.File(IDS_PATH, "r")
 ids = [x.decode('utf-8') for x in ids_file["names"]]
 ids_file.close()
 print("expect {} total heatmaps".format(len(ids)), flush=True)
+print(tf.__version__)
 
 if not os.path.exists(OUTPUT_PATH):
     os.makedirs(OUTPUT_PATH)
@@ -221,8 +206,10 @@ type_to_int_label = {}
 
 with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(OUTPUT_PATH, args.index)) as writer:
     for i, sn_id in enumerate(lcdata_ids):
-        if i % 1000 == 0:
-            print("processing {} of {}".format(i, len(lcdata_ids)), flush=True)
+        if i > 1000:
+            break
+        # if i % 1000 == 0:
+        #     print("processing {} of {}".format(i, len(lcdata_ids)), flush=True)
         sn_id = int(sn_id)
         sn_metadata = metadata[metadata.object_id == sn_id]
 
@@ -247,15 +234,9 @@ with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(OUTPUT_PATH, args.ind
             "b'Y '": 5
         }
         replaced_passband = [filter_to_band_number[elem] if elem in filter_to_band_number else int(elem) for elem in sn_data['passband']]
-        # for k, v in filter_to_band_number.items():
-        #     replaced_passband[sn_data['passband'] == k] = v
         sn_data['passband'] = replaced_passband
         
         sn_data.add_row([min(sn_data['mjd'])-100, 0, 0, 0])
-        # sn_data = sn_data[sn_data['mjd'] < peak_mjd - 20] # truncated lightcurve
-        # if len(sn_data) == 0:
-        #     removed_by_type[sn_name] = 1 if sn_name not in removed_by_type else removed_by_type[sn_name] + 1
-        #     continue
         sn_data.add_row([max(sn_data['mjd'])+100, 0, 0, 0])
         band_to_wave = {
             0: 3670.69,
@@ -282,7 +263,7 @@ with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(OUTPUT_PATH, args.ind
             if sn_name == "SNIa" or sn_name == "Ia":
                 type_to_int_label[sn_name] = 0
             else:
-                type_to_int_label[sn_name] = (max(type_to_int_label.values) if len(type_to_int_label.values) > 0 else 0) + 1
+                type_to_int_label[sn_name] = (max(type_to_int_label.values()) if len(type_to_int_label.values()) > 0 else 0) + 1
 
         writer.write(image_example(heatmap.flatten().tobytes(), type_to_int_label[sn_name], sn_id))
         done_ids.append(sn_id)

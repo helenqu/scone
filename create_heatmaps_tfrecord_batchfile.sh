@@ -6,4 +6,4 @@
 #SBATCH --time=01:00:00
 #SBATCH --array=0,1
 
-srun /global/homes/h/helenqu/create_heatmaps/create_heatmaps_tfrecord_shellscript.sh
+srun /global/homes/h/helenqu/scone/create_heatmaps_tfrecord_shellscript.sh
