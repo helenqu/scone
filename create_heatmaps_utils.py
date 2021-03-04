@@ -1,17 +1,15 @@
 import numpy as np
-import os, sys
+import os
 import pandas as pd
 import george
 from george import kernels
 from scipy.optimize import minimize
 from functools import partial
 from astropy.table import Table
-import random
 import tensorflow as tf
 import yaml
 import argparse
 import h5py
-import sys
 
 # HELPER FUNCTIONS
 def get_extinction(ebv, wave):
@@ -178,8 +176,7 @@ OUTPUT_PATH = config["output_path"]
 SN_TYPE_ID_MAP = config["sn_type_id_to_name"]
 WAVELENGTH_BINS = config["num_wavelength_bins"]
 MJD_BINS = config["num_mjd_bins"]
-if "ids_path" in config:
-    IDS_PATH = config["ids_path"]
+IDS_PATH = config["ids_path"] if "ids_path" in config else None
 
 print("writing to {}".format(OUTPUT_PATH), flush=True)
 
@@ -189,10 +186,14 @@ lcdata = pd.read_csv(LCDATA_PATH, compression="gzip") if os.path.splitext(LCDATA
 lcdata_ids = metadata[metadata.true_target.isin(SN_TYPE_ID_MAP.keys())].object_id
 lcdata = Table.from_pandas(lcdata)
 lcdata.add_index('object_id')
-ids_file = h5py.File(IDS_PATH, "r")
-ids = [x.decode('utf-8') for x in ids_file["names"]]
-ids_file.close()
-print("expect {} total heatmaps".format(len(ids)), flush=True)
+if IDS_PATH:
+    ids_file = h5py.File(IDS_PATH, "r")
+    ids = [x.decode('utf-8') for x in ids_file["names"]]
+    ids_file.close()
+    print("expect {} total heatmaps".format(len(ids)), flush=True)
+else:
+    ids = None
+    print("expect {} total heatmaps".format(len(lcdata_ids)), flush=True)
 print(tf.__version__)
 
 if not os.path.exists(OUTPUT_PATH):
@@ -217,7 +218,7 @@ with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(OUTPUT_PATH, args.ind
             continue
         sn_name = SN_TYPE_ID_MAP[sn_metadata.true_target.iloc[0]]
 
-        if "{}_{}".format(sn_name, sn_id) not in ids:
+        if ids and "{}_{}".format(sn_name, sn_id) not in ids:
             continue
 
         if sn_id in done_ids:
