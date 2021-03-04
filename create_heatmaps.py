@@ -24,6 +24,8 @@ def load_config(config_path):
 #     config['lcdata_paths'] = [path.replace("HEAD", "PHOT") for path in config['metadata_paths']]
 #     write_config(config, args.config_path)
 
+# print(args.config_path)
+# print(os.path.abspath(args.config_path))
 config = load_config(args.config_path)
 num_paths = len(config["lcdata_paths"])
 
@@ -53,7 +55,7 @@ with open(config["donefile"], "w+") as donefile:
 sys.exit(exit_code)
 
 ## TODO: find out how to use pippin sbatch header
-# SBATCH VERSION
+# WRITE AND SUBMIT SCRIPT
 #    print("sbatch")
 #    sbatch_header = """#!/bin/bash
 
@@ -88,5 +90,22 @@ sys.exit(exit_code)
 #for i in range(NUM_PATHS):
 #    #TODO: determine a good way to estimate time
 #    cmd = "srun -C haswell -q regular -N 1 --time 01:00:00 {} {} {} &".format(SCRIPT_PATH, CONFIG_PATH, i)
+#    # subprocess.run("module load tensorflow/intel-2.2.0-py37".split(" "))
+#    subprocess.Popen(cmd.split(" "))
+
+# SUBMIT SCRIPT WITHOUT WRITING
+#if config["input_path"]:
+#    config['metadata_paths'] = [f.path for f in os.scandir(config["input_path"]) if "HEAD.csv" in f.name]
+#    config['lcdata_paths'] = [path.replace("HEAD", "PHOT") for path in config['metadata_paths']]
+#    write_config(config, args.config_path)
+
+#NUM_PATHS = len(config["lcdata_paths"])
+#SCRIPT_PATH = os.path.abspath("create_heatmaps_tfrecord_shellscript.sh")
+#CONFIG_PATH = os.path.abspath(args.config_path) 
+
+#for i in range(NUM_PATHS):
+#    #TODO: determine a good way to estimate time
+#    cmd = "srun --partition broadwl -N 1 --time 01:00:00 {} {} {} &".format(SCRIPT_PATH, CONFIG_PATH, i)
+#    print(cmd)
 #    # subprocess.run("module load tensorflow/intel-2.2.0-py37".split(" "))
 #    subprocess.Popen(cmd.split(" "))

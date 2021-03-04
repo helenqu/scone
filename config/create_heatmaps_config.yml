@@ -1,17 +1,13 @@
 metadata_paths:
-  - "/global/cscratch1/sd/helenqu/plasticc_test_data/metadata_0.csv"
-  - "/global/cscratch1/sd/helenqu/plasticc_test_data/metadata_1.csv"
+  - "/project2/rkessler/SURVEYS/DES/USERS/helenqu/PIP_HELEN_PLASTICC_NON-IA86f49_NONIaMODEL4-0010_HEAD.csv"
 lcdata_paths:
-  - "/global/cscratch1/sd/helenqu/plasticc_test_data/lcdata_0.csv"
-  - "/global/cscratch1/sd/helenqu/plasticc_test_data/lcdata_1.csv"
+  - "/project2/rkessler/SURVEYS/DES/USERS/helenqu/PIP_HELEN_PLASTICC_NON-IA86f49_NONIaMODEL4-0010_PHOT.csv"
 input_path: #alternatively, pass in a dir path and look for PHOT and HEAD files in dir
-ids_path: "/global/cscratch1/sd/helenqu/plasticc_test_heatmaps/no_ttfd_snr_5/32_x_90_heatmaps/peak-50+130_cuts_from_full_ids.hdf5"
-output_path: "/global/homes/h/helenqu/test_tfrecord"
+output_path: "/project2/rkessler/SURVEYS/DES/USERS/helenqu/test_create_heatmaps"
+# omitted ids_path
 
 num_wavelength_bins: 32
 num_mjd_bins: 180
-wavelength_interval: 221.875
-mjd_interval: 1.0
 
 Ia_fraction: 0.5 # "categorical" for class-balanced categorical split
 categorical_min_per_type: 200
