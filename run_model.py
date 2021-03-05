@@ -35,5 +35,6 @@ model = define_and_compile_model(INPUT_SHAPE, CATEGORICAL, NUM_TYPES)
 #TODO: maybe split out the test set processing
 train_set, val_set, test_set, train_ids, val_ids, test_ids = split_and_retrieve_data(HEATMAPS_PATH, TRAIN_PROPORTION, PREDICT, INPUT_SHAPE, CATEGORICAL)
 model, history = train(model, train_set, val_set, BATCH_SIZE, NUM_EPOCHS)
+
 if PREDICT:
     test(model, test_set, BATCH_SIZE)

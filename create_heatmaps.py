@@ -27,6 +27,7 @@ def load_config(config_path):
 # print(args.config_path)
 # print(os.path.abspath(args.config_path))
 config = load_config(args.config_path)
+<<<<<<< HEAD
 num_paths = len(config["lcdata_paths"])
 
 procs = []
@@ -87,6 +88,46 @@ sys.exit(exit_code)
 #        batchfile.write(final_slurm)
 #    subprocess.run(["sbatch", "slurm.job"])
 #else:
+=======
+if config["input_path"]:
+    config['metadata_paths'] = [f.path for f in os.scandir(config["input_path"]) if "HEAD.csv" in f.name]
+    config['lcdata_paths'] = [path.replace("HEAD", "PHOT") for path in config['metadata_paths']]
+    write_config(config, args.config_path)
+
+NUM_PATHS = len(config["lcdata_paths"])
+SCRIPT_PATH = os.path.abspath("create_heatmaps_tfrecord_shellscript.sh")
+CONFIG_PATH = os.path.abspath(args.config_path) 
+
+sbatch_header = """#!/bin/bash
+
+#SBATCH --partition=broadwl
+#SBATCH --account=pi-rkessler
+#SBATCH --job-name=create_heatmaps
+#SBATCH --output=test_sbatch_heatmaps.log
+#SBATCH --time=00:10:00
+#SBATCH --nodes=1
+#SBATCH --mem-per-cpu=1000
+#SBATCH --exclusive
+#SBATCH --ntasks-per-node=1"""
+
+if NUM_PATHS > 1:
+    sbatch_header += "\n#SBATCH --array=0-{}".format(NUM_PATHS-1)
+else:
+    sbatch_header += "\n#SBATCH --array=0"
+
+task = """source activate scone_cpu
+python create_heatmaps_utils.py --config-path {} --index $SLURM_ARRAY_TASK_ID""".format(CONFIG_PATH)
+
+slurm = """{sbatch_header}
+{task}
+"""
+
+format_dict = {"sbatch_header": sbatch_header, "task": task}
+final_slurm = slurm.format(**format_dict)
+with open("./slurm.job", "w+") as batchfile:
+    batchfile.write(final_slurm)
+
+subprocess.Popen("sbatch slurm.job".split())
 #for i in range(NUM_PATHS):
 #    #TODO: determine a good way to estimate time
 #    cmd = "srun -C haswell -q regular -N 1 --time 01:00:00 {} {} {} &".format(SCRIPT_PATH, CONFIG_PATH, i)
