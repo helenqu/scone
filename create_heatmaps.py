@@ -116,7 +116,7 @@ else:
     sbatch_header += "\n#SBATCH --array=0"
 
 task = """source activate scone_cpu
-python create_heatmaps_utils.py --config-path {} --index $SLURM_ARRAY_TASK_ID""".format(CONFIG_PATH)
+python create_heatmaps_utils.py --config_path {} --index $SLURM_ARRAY_TASK_ID""".format(CONFIG_PATH)
 
 slurm = """{sbatch_header}
 {task}

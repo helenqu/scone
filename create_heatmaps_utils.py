@@ -158,7 +158,6 @@ def image_example(image_string, label, id):
     example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
     return example_proto.SerializeToString()
 
-
 # LOAD DATA
 def run(config, index):
     # sys.stdout = open(os.path.join(config["heatmaps_path"], "create_heatmaps_{}.log".format(index)), "w+")

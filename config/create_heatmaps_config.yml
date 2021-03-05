@@ -3,7 +3,7 @@ metadata_paths:
 lcdata_paths:
   - "/project2/rkessler/SURVEYS/DES/USERS/helenqu/PIP_HELEN_PLASTICC_NON-IA86f49_NONIaMODEL4-0010_PHOT.csv"
 input_path: #alternatively, pass in a dir path and look for PHOT and HEAD files in dir
-output_path: "/project2/rkessler/SURVEYS/DES/USERS/helenqu/test_create_heatmaps"
+heatmaps_path: "/project2/rkessler/SURVEYS/DES/USERS/helenqu/test_create_heatmaps"
 # omitted ids_path
 
 num_wavelength_bins: 32

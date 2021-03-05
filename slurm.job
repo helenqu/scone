@@ -1,0 +1,14 @@
+#!/bin/bash
+
+#SBATCH --partition=broadwl
+#SBATCH --account=pi-rkessler
+#SBATCH --job-name=create_heatmaps
+#SBATCH --output=test_sbatch_heatmaps.log
+#SBATCH --time=00:10:00
+#SBATCH --nodes=1
+#SBATCH --mem-per-cpu=1000
+#SBATCH --exclusive
+#SBATCH --ntasks-per-node=1
+#SBATCH --array=0
+source activate scone_cpu
+python create_heatmaps_utils.py --config_path /project2/rkessler/SURVEYS/DES/USERS/helenqu/scone/config/create_heatmaps_config.yml --index $SLURM_ARRAY_TASK_ID
