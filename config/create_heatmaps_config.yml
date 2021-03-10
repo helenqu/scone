@@ -1,9 +1,11 @@
 metadata_paths:
-  - "/project2/rkessler/SURVEYS/DES/USERS/helenqu/PIP_HELEN_PLASTICC_NON-IA86f49_NONIaMODEL4-0010_HEAD.csv"
+  - "/project2/rkessler/SURVEYS/DES/USERS/helenqu/PIP_HELEN_PLASTICC_IIN_PLf3d2d_NONIaMODEL0-0001_HEAD.csv"
+  - "/project2/rkessler/SURVEYS/DES/USERS/helenqu/PIP_HELEN_PLASTICC_IIN_PLf3d2d_NONIaMODEL0-0002_HEAD.csv"
 lcdata_paths:
-  - "/project2/rkessler/SURVEYS/DES/USERS/helenqu/PIP_HELEN_PLASTICC_NON-IA86f49_NONIaMODEL4-0010_PHOT.csv"
+  - "/project2/rkessler/SURVEYS/DES/USERS/helenqu/PIP_HELEN_PLASTICC_IIN_PLf3d2d_NONIaMODEL0-0001_PHOT.csv"
+  - "/project2/rkessler/SURVEYS/DES/USERS/helenqu/PIP_HELEN_PLASTICC_IIN_PLf3d2d_NONIaMODEL0-0002_PHOT.csv"
 input_path: #alternatively, pass in a dir path and look for PHOT and HEAD files in dir
-heatmaps_path: "/project2/rkessler/SURVEYS/DES/USERS/helenqu/test_create_heatmaps"
+heatmaps_path: "/project2/rkessler/SURVEYS/DES/USERS/helenqu/test_create_heatmaps_II"
 # omitted ids_path
 
 num_wavelength_bins: 32
