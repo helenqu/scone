@@ -158,16 +158,9 @@ def image_example(image_string, label, id):
     example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
     return example_proto.SerializeToString()
 
-<<<<<<< HEAD
 # LOAD DATA
 def run(config, index):
     # sys.stdout = open(os.path.join(config["heatmaps_path"], "create_heatmaps_{}.log".format(index)), "w+")
-=======
-
-# LOAD DATA
-def run(config, index):
-    sys.stdout = open("create_heatmaps_{}.log".format(index), "w+")
->>>>>>> incorporated mode (train/predict), added run method to create_heatmaps_utils, changed create_heatmaps from sbatch to multiprocessing
 
     METADATA_PATH = config["metadata_paths"][index]
     LCDATA_PATH = config["lcdata_paths"][index]
@@ -189,6 +182,7 @@ def run(config, index):
         ids = [x.decode('utf-8') for x in ids_file["names"]]
         ids_file.close()
 <<<<<<< HEAD
+<<<<<<< HEAD
         print("job {}: found ids, expect {} total heatmaps".format(index, len(ids)), flush=True)
     else:
         ids = None
@@ -200,6 +194,12 @@ def run(config, index):
         print("expect {} total heatmaps".format(len(lcdata_ids)), flush=True)
     print(tf.__version__)
 >>>>>>> incorporated mode (train/predict), added run method to create_heatmaps_utils, changed create_heatmaps from sbatch to multiprocessing
+=======
+        print("job {}: found ids, expect {} total heatmaps".format(index, len(ids)), flush=True)
+    else:
+        ids = None
+        print("job {}: no ids, expect {} total heatmaps".format(index, len(lcdata_ids)), flush=True)
+>>>>>>> fixed missing variable / other dumb errors
 
     if not os.path.exists(OUTPUT_PATH):
         os.makedirs(OUTPUT_PATH)
@@ -213,6 +213,7 @@ def run(config, index):
     with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(OUTPUT_PATH, index)) as writer:
         for i, sn_id in enumerate(lcdata_ids):
 <<<<<<< HEAD
+<<<<<<< HEAD
             if i % 1000 == 0:
                 print("job {}: processing {} of {}".format(index, i, len(lcdata_ids)), flush=True)
 =======
@@ -221,6 +222,10 @@ def run(config, index):
             # if i % 1000 == 0:
             #     print("processing {} of {}".format(i, len(lcdata_ids)), flush=True)
 >>>>>>> incorporated mode (train/predict), added run method to create_heatmaps_utils, changed create_heatmaps from sbatch to multiprocessing
+=======
+            if i % 1000 == 0:
+                print("job {}: processing {} of {}".format(index, i, len(lcdata_ids)), flush=True)
+>>>>>>> fixed missing variable / other dumb errors
             sn_id = int(sn_id)
             sn_metadata = metadata[metadata.object_id == sn_id]
 
