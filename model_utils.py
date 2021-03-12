@@ -59,6 +59,10 @@ def define_and_compile_model(input_shape, categorical, num_types):
 # main data retrieval function
 # requires:
 #   - heatmaps_path
+#   - train_proportion
+#   - include_test_set
+#   - input_shape
+#   - categorical
 #   - get_images
 #   - stratified_split
 #   - extract_ids

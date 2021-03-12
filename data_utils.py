@@ -26,7 +26,7 @@ def get_images(raw_record, input_shape, categorical): # ASSUMES has ids always
 # requires:
 #   - dataset
 #   - train_proportion
-#   - val_proportion
+#   - include_test_set
 def stratified_split(dataset, train_proportion, include_test_set): # ASSUMES has ids always
     by_type_data_lists = {}
 

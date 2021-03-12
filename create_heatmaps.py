@@ -58,6 +58,7 @@ with open(config["donefile"], "w+") as donefile:
     donefile.write(donefile_info)
 
 sys.exit(exit_code)
+<<<<<<< HEAD
 
 ## TODO: find out how to use pippin sbatch header
 # WRITE AND SUBMIT SCRIPT
@@ -92,40 +93,13 @@ sys.exit(exit_code)
 #        batchfile.write(final_slurm)
 #    subprocess.run(["sbatch", "slurm.job"])
 #else:
-=======
-if config["input_path"]:
-    config['metadata_paths'] = [f.path for f in os.scandir(config["input_path"]) if "HEAD.csv" in f.name]
-    config['lcdata_paths'] = [path.replace("HEAD", "PHOT") for path in config['metadata_paths']]
-    write_config(config, args.config_path)
+#     donefile_info = "indices of failed create heatmaps jobs: {}\ncheck out the LC data files or metadata files at those indices in the config yml at {}\nlogs located at create_heatmaps_i.log, i=failed index".format(failed_procs, args.config_path)
+#     exit_code = 1
 
-NUM_PATHS = len(config["lcdata_paths"])
-SCRIPT_PATH = os.path.abspath("create_heatmaps_tfrecord_shellscript.sh")
-CONFIG_PATH = os.path.abspath(args.config_path) 
+# with open(config["donefile"], "w+") as donefile:
+#     donefile.write(donefile_info)
 
-sbatch_header = """#!/bin/bash
-
-#SBATCH --partition=broadwl
-#SBATCH --account=pi-rkessler
-#SBATCH --job-name=create_heatmaps
-#SBATCH --output=test_sbatch_heatmaps.log
-#SBATCH --time=00:10:00
-#SBATCH --nodes=1
-#SBATCH --mem-per-cpu=1000
-#SBATCH --exclusive
-#SBATCH --ntasks-per-node=1"""
-
-if NUM_PATHS > 1:
-    sbatch_header += "\n#SBATCH --array=0-{}".format(NUM_PATHS-1)
-=======
->>>>>>> incorporated mode (train/predict), added run method to create_heatmaps_utils, changed create_heatmaps from sbatch to multiprocessing
-else:
-    donefile_info = "indices of failed create heatmaps jobs: {}\ncheck out the LC data files or metadata files at those indices in the config yml at {}\nlogs located at create_heatmaps_i.log, i=failed index".format(failed_procs, args.config_path)
-    exit_code = 1
-
-with open(config["donefile"], "w+") as donefile:
-    donefile.write(donefile_info)
-
-sys.exit(exit_code)
+# sys.exit(exit_code)
 
 ## TODO: find out how to use pippin sbatch header
 # SBATCH VERSION
