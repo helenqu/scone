@@ -1,5 +1,5 @@
 import numpy as np
-import os
+import os, sys
 import pandas as pd
 import george
 from george import kernels
@@ -10,6 +10,7 @@ import tensorflow as tf
 import yaml
 import argparse
 import h5py
+import time
 
 # HELPER FUNCTIONS
 def get_extinction(ebv, wave):
@@ -157,125 +158,129 @@ def image_example(image_string, label, id):
     example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
     return example_proto.SerializeToString()
 
-########### START MAIN FUNCTION ########### 
-parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
-parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
-parser.add_argument('--index', type=int, default=0, help='integer job index / slurm array job id')
-args = parser.parse_args()
-
-# LOAD CONFIG
-def load_config(config_path):
-    with open(config_path, "r") as cfgfile:
-        config = yaml.load(cfgfile)
-    return config
-
-config = load_config(args.config_path)
-METADATA_PATH = config["metadata_paths"][args.index]
-LCDATA_PATH = config["lcdata_paths"][args.index]
-OUTPUT_PATH = config["output_path"]
-SN_TYPE_ID_MAP = config["sn_type_id_to_name"]
-WAVELENGTH_BINS = config["num_wavelength_bins"]
-MJD_BINS = config["num_mjd_bins"]
-IDS_PATH = config["ids_path"] if "ids_path" in config else None
-
-print("writing to {}".format(OUTPUT_PATH), flush=True)
 
 # LOAD DATA
-metadata = pd.read_csv(METADATA_PATH, compression="gzip") if os.path.splitext(METADATA_PATH)[1] == ".gz" else pd.read_csv(METADATA_PATH)
-lcdata = pd.read_csv(LCDATA_PATH, compression="gzip") if os.path.splitext(LCDATA_PATH)[1] == ".gz" else pd.read_csv(LCDATA_PATH)
-lcdata_ids = metadata[metadata.true_target.isin(SN_TYPE_ID_MAP.keys())].object_id
-lcdata = Table.from_pandas(lcdata)
-lcdata.add_index('object_id')
-if IDS_PATH:
-    ids_file = h5py.File(IDS_PATH, "r")
-    ids = [x.decode('utf-8') for x in ids_file["names"]]
-    ids_file.close()
-    print("expect {} total heatmaps".format(len(ids)), flush=True)
-else:
-    ids = None
-    print("expect {} total heatmaps".format(len(lcdata_ids)), flush=True)
-print(tf.__version__)
+def run(config, index):
+    # sys.stdout = open(os.path.join(config["heatmaps_path"], "create_heatmaps_{}.log".format(index)), "w+")
 
-if not os.path.exists(OUTPUT_PATH):
-    os.makedirs(OUTPUT_PATH)
+    METADATA_PATH = config["metadata_paths"][index]
+    LCDATA_PATH = config["lcdata_paths"][index]
+    OUTPUT_PATH = config["heatmaps_path"]
+    SN_TYPE_ID_MAP = config["sn_type_id_to_name"]
+    WAVELENGTH_BINS = config["num_wavelength_bins"]
+    MJD_BINS = config["num_mjd_bins"]
+    IDS_PATH = config["ids_path"] if "ids_path" in config else None
 
-done_by_type = {}
-removed_by_type = {}
-done_ids = []
+    print("writing to {}".format(OUTPUT_PATH), flush=True)
 
-type_to_int_label = {}
+    metadata = pd.read_csv(METADATA_PATH, compression="gzip") if os.path.splitext(METADATA_PATH)[1] == ".gz" else pd.read_csv(METADATA_PATH)
+    lcdata = pd.read_csv(LCDATA_PATH, compression="gzip") if os.path.splitext(LCDATA_PATH)[1] == ".gz" else pd.read_csv(LCDATA_PATH)
+    lcdata_ids = metadata[metadata.true_target.isin(SN_TYPE_ID_MAP.keys())].object_id
+    lcdata = Table.from_pandas(lcdata)
+    lcdata.add_index('object_id')
+    if IDS_PATH:
+        ids_file = h5py.File(IDS_PATH, "r")
+        ids = [x.decode('utf-8') for x in ids_file["names"]]
+        ids_file.close()
+        print("job {}: found ids, expect {} total heatmaps".format(index, len(ids)), flush=True)
+    else:
+        ids = None
+        print("job {}: no ids, expect {} total heatmaps".format(index, len(lcdata_ids)), flush=True)
 
-with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(OUTPUT_PATH, args.index)) as writer:
-    for i, sn_id in enumerate(lcdata_ids):
-        if i > 1000:
-            break
-        # if i % 1000 == 0:
-        #     print("processing {} of {}".format(i, len(lcdata_ids)), flush=True)
-        sn_id = int(sn_id)
-        sn_metadata = metadata[metadata.object_id == sn_id]
+    if not os.path.exists(OUTPUT_PATH):
+        os.makedirs(OUTPUT_PATH)
 
-        if sn_metadata.empty:
-            continue
-        sn_name = SN_TYPE_ID_MAP[sn_metadata.true_target.iloc[0]]
+    done_by_type = {}
+    removed_by_type = {}
+    done_ids = []
 
-        if ids and "{}_{}".format(sn_name, sn_id) not in ids:
-            continue
+    type_to_int_label = {}
 
-        if sn_id in done_ids:
+    with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(OUTPUT_PATH, index)) as writer:
+        for i, sn_id in enumerate(lcdata_ids):
+            if i % 1000 == 0:
+                print("job {}: processing {} of {}".format(index, i, len(lcdata_ids)), flush=True)
+            sn_id = int(sn_id)
+            sn_metadata = metadata[metadata.object_id == sn_id]
+
+            if sn_metadata.empty:
+                continue
+            sn_name = SN_TYPE_ID_MAP[sn_metadata.true_target.iloc[0]]
+
+            if ids and "{}_{}".format(sn_name, sn_id) not in ids:
+                continue
+
+            if sn_id in done_ids:
+                done_by_type[sn_name] = 1 if sn_name not in done_by_type else done_by_type[sn_name] + 1
+                continue
+            sn_data = lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
+            peak_mjd = sn_metadata['true_peakmjd'].iloc[0]
+            filter_to_band_number = {
+                "b'u '": 0,
+                "b'g '": 1,
+                "b'r '": 2,
+                "b'i '": 3,
+                "b'z '": 4,
+                "b'Y '": 5
+            }
+            replaced_passband = [filter_to_band_number[elem] if elem in filter_to_band_number else int(elem) for elem in sn_data['passband']]
+            sn_data['passband'] = replaced_passband
+            
+            sn_data.add_row([min(sn_data['mjd'])-100, 0, 0, 0])
+            sn_data.add_row([max(sn_data['mjd'])+100, 0, 0, 0])
+            band_to_wave = {
+                0: 3670.69,
+                1: 4826.85,
+                2: 6223.24,
+                3: 7545.98,
+                4: 8590.90,
+                5: 9710.28
+            }
+            wave = [band_to_wave[elem] for elem in sn_data['passband']]
+
+            gp = build_gp(20, sn_data, wave)
+            if gp == None:
+                removed_by_type[sn_name] = 1 if sn_name not in removed_by_type else removed_by_type[sn_name] + 1
+                continue
+
+            milkyway_ebv = sn_metadata['mwebv'].iloc[0]
+            z = sn_metadata['true_z'].iloc[0]
+
+            predictions, prediction_errs = get_predictions_heatmap(gp, peak_mjd, MJD_BINS, WAVELENGTH_BINS, milkyway_ebv)
+            heatmap = np.dstack((predictions, prediction_errs))
+
+            if sn_name not in type_to_int_label:
+                if sn_name == "SNIa" or sn_name == "Ia":
+                    type_to_int_label[sn_name] = 0
+                else:
+                    type_to_int_label[sn_name] = (max(type_to_int_label.values()) if len(type_to_int_label.values()) > 0 else 0) + 1
+
+            writer.write(image_example(heatmap.flatten().tobytes(), type_to_int_label[sn_name], sn_id))
+            done_ids.append(sn_id)
             done_by_type[sn_name] = 1 if sn_name not in done_by_type else done_by_type[sn_name] + 1
-            continue
-        sn_data = lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
-        peak_mjd = sn_metadata['true_peakmjd'].iloc[0]
-        filter_to_band_number = {
-            "b'u '": 0,
-            "b'g '": 1,
-            "b'r '": 2,
-            "b'i '": 3,
-            "b'z '": 4,
-            "b'Y '": 5
-        }
-        replaced_passband = [filter_to_band_number[elem] if elem in filter_to_band_number else int(elem) for elem in sn_data['passband']]
-        sn_data['passband'] = replaced_passband
-        
-        sn_data.add_row([min(sn_data['mjd'])-100, 0, 0, 0])
-        sn_data.add_row([max(sn_data['mjd'])+100, 0, 0, 0])
-        band_to_wave = {
-            0: 3670.69,
-            1: 4826.85,
-            2: 6223.24,
-            3: 7545.98,
-            4: 8590.90,
-            5: 9710.28
-        }
-        wave = [band_to_wave[elem] for elem in sn_data['passband']]
 
-        gp = build_gp(20, sn_data, wave)
-        if gp == None:
-            removed_by_type[sn_name] = 1 if sn_name not in removed_by_type else removed_by_type[sn_name] + 1
-            continue
+    with open("{}/done.log".format(OUTPUT_PATH), "a+") as f:
+        f.write("####### JOB {} REPORT #######\n".format(index))
+        f.write("type name mapping to integer label used for classification: {}".format(type_to_int_label))
+        # TODO: fix the output to done.log
+        f.write(str(done_by_type).replace("'", "") + "\n")
+        total = 0
+        for v in done_by_type.values():
+            total += v
+        f.write("done: {}\n".format(total))
+        f.write("removed: {}\n".format(str(removed_by_type).replace("'", "")))
 
-        milkyway_ebv = sn_metadata['mwebv'].iloc[0]
-        z = sn_metadata['true_z'].iloc[0]
+########### START MAIN FUNCTION ########### 
+# parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
+# parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
+# parser.add_argument('--index', type=int, default=0, help='integer job index / slurm array job id')
+# args = parser.parse_args()
 
-        predictions, prediction_errs = get_predictions_heatmap(gp, peak_mjd, MJD_BINS, WAVELENGTH_BINS, milkyway_ebv)
-        heatmap = np.dstack((predictions, prediction_errs))
+# # LOAD CONFIG
+# def load_config(config_path):
+#     with open(config_path, "r") as cfgfile:
+#         config = yaml.load(cfgfile)
+#     return config
 
-        if sn_name not in type_to_int_label:
-            if sn_name == "SNIa" or sn_name == "Ia":
-                type_to_int_label[sn_name] = 0
-            else:
-                type_to_int_label[sn_name] = (max(type_to_int_label.values()) if len(type_to_int_label.values()) > 0 else 0) + 1
-
-        writer.write(image_example(heatmap.flatten().tobytes(), type_to_int_label[sn_name], sn_id))
-        done_ids.append(sn_id)
-        done_by_type[sn_name] = 1 if sn_name not in done_by_type else done_by_type[sn_name] + 1
-
-with open("{}/done.log".format(OUTPUT_PATH), "a+") as f:
-    f.write("type name mapping to integer label used for classification: {}".format(type_to_int_label))
-    # TODO: fix the output to done.log
-    f.write(str(done_by_type).replace("'", ""))
-    total = 0
-    for v in done_by_type.values():
-        total += v
-    f.write("done: {}".format(total))
-    f.write("removed: {}".format(str(removed_by_type).replace("'", "")))
+# config = load_config(args.config_path)
+# run(config, args.index)

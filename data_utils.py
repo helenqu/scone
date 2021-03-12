@@ -27,7 +27,7 @@ def get_images(raw_record, input_shape, categorical): # ASSUMES has ids always
 #   - dataset
 #   - train_proportion
 #   - val_proportion
-def stratified_split(dataset, train_proportion, val_proportion): # ASSUMES has ids always
+def stratified_split(dataset, train_proportion, include_test_set): # ASSUMES has ids always
     by_type_data_lists = {}
 
     for i, elem in enumerate(dataset):
@@ -54,6 +54,8 @@ def stratified_split(dataset, train_proportion, val_proportion): # ASSUMES has i
     train_set = None
     val_set = None
     test_set = None
+    #TODO: make this no test set flow less ugly
+    val_proportion = 0.5*(1-train_proportion) if include_test_set else 1-train_proportion
     # make a TF dataset from all heatmaps/ids of each type
     for sntype, data in by_type_data_lists.items():
         dataset = tf.data.Dataset.from_tensor_slices((tf.stack(data[:,1], axis=0), [sntype]*len(data), list(data[:,0].astype(np.int32))))
@@ -64,18 +66,21 @@ def stratified_split(dataset, train_proportion, val_proportion): # ASSUMES has i
             train_set = train_set.concatenate(dataset.take(int(len(data)*train_proportion)))
             test_val_set = dataset.skip(int(len(data)*train_proportion))
             val_set = val_set.concatenate(test_val_set.take(int(len(data)*val_proportion)))
-            test_set = test_set.concatenate(test_val_set.skip(int(len(data)*val_proportion)))
+            if include_test_set:
+                test_set = test_set.concatenate(test_val_set.skip(int(len(data)*val_proportion)))
         else:
             train_set = dataset.take(int(len(data)*train_proportion))
             test_val_set = dataset.skip(int(len(data)*train_proportion))
             val_set = test_val_set.take(int(len(data)*val_proportion))
-            test_set = test_val_set.skip(int(len(data)*val_proportion))
+            if include_test_set:
+                test_set = test_val_set.skip(int(len(data)*val_proportion))
 
-    full_dataset_size = len(data)*len(by_type_data_lists.keys) #full dataset size = heatmaps per type * num types
+    full_dataset_size = len(data)*len(by_type_data_lists.keys()) #full dataset size = heatmaps per type * num types
     train_set = train_set.shuffle(full_dataset_size)
     val_set = val_set.shuffle(int(full_dataset_size*val_proportion))
-    test_set = test_set.shuffle(int(full_dataset_size*val))
 
+    if include_test_set:
+        test_set = test_set.shuffle(int(full_dataset_size*val))
     return train_set, val_set, test_set
 
 # extract ids from all datasets post-caching
@@ -85,7 +90,13 @@ def stratified_split(dataset, train_proportion, val_proportion): # ASSUMES has i
 def extract_ids(train_set, val_set, test_set):
     train_ids, train_set = extract_ids_from_dataset(train_set)
     val_ids, val_set = extract_ids_from_dataset(val_set)
-    test_ids, test_set = extract_ids_from_dataset(test_set)
+    print("makeup of training set: {}".format(get_dataset_makeup(train_set)))
+    print("makeup of validation set: {}".format(get_dataset_makeup(val_set)))
+    if test_set:
+        test_ids, test_set = extract_ids_from_dataset(test_set)
+        print("makeup of test set: {}".format(get_dataset_makeup(test_set)))
+    else:
+        test_ids = None
     
     return train_set, val_set, test_set, train_ids, val_ids, test_ids
 
@@ -104,9 +115,10 @@ def extract_ids_from_dataset(cached_dataset):
 # get number of examples per label in dataset
 # requires:
 #   - dataset
-def get_dataset_makeup(dataset)
-    for i, batch in enumerate(dataset):
-        for sntype in batch[1].numpy():
-            relative_abundance[sntype] = 1 if sntype not in relative_abundance else relative_abundance[sntype] + 1
+def get_dataset_makeup(dataset):
+    relative_abundance = {}
+    for i, elem in enumerate(dataset):
+        sntype = elem[1].numpy()
+        relative_abundance[sntype] = 1 if sntype not in relative_abundance else relative_abundance[sntype] + 1
 
     return relative_abundance

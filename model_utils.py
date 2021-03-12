@@ -11,7 +11,7 @@ from data_utils import *
 #   - INPUT_SHAPE
 #   - CATEGORICAL
 #   - NUM_TYPES
-def define_and_compile_model(input_shape, categorical, num_types=None):
+def define_and_compile_model(input_shape, categorical, num_types):
     y, x, _ = input_shape
     
     model = models.Sequential()
@@ -62,17 +62,17 @@ def define_and_compile_model(input_shape, categorical, num_types=None):
 #   - get_images
 #   - stratified_split
 #   - extract_ids
-def split_and_retrieve_data(heatmaps_path):
+def split_and_retrieve_data(heatmaps_path, train_proportion, include_test_set, input_shape, categorical):
     raw_dataset = tf.data.TFRecordDataset(
         ["{}/{}".format(heatmaps_path, f.name) for f in os.scandir(heatmaps_path) if "tfrecord" in f.name], 
         num_parallel_reads=80)
-    dataset = raw_dataset.map(lambda x: get_images(x), num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    dataset = raw_dataset.map(lambda x: get_images(x, input_shape, categorical), num_parallel_calls=tf.data.experimental.AUTOTUNE)
     dataset = dataset.apply(tf.data.experimental.ignore_errors())
 
-    train_set, val_set, test_set = stratified_split(dataset)
+    train_set, val_set, test_set = stratified_split(dataset, train_proportion, include_test_set)
     train_set = train_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
     val_set = val_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
-    test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
+    test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if test_set else None
 
     return extract_ids(train_set, val_set, test_set)
 
