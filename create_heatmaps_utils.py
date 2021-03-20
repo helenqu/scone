@@ -170,6 +170,7 @@ def run(config, index):
     WAVELENGTH_BINS = config["num_wavelength_bins"]
     MJD_BINS = config["num_mjd_bins"]
     IDS_PATH = config["ids_path"] if "ids_path" in config else None
+    CATEGORICAL = config["categorical"]
 
     print("writing to {}".format(OUTPUT_PATH), flush=True)
 
@@ -251,9 +252,13 @@ def run(config, index):
 
             if sn_name not in type_to_int_label:
                 if sn_name == "SNIa" or sn_name == "Ia":
-                    type_to_int_label[sn_name] = 0
+                    type_to_int_label[sn_name] = 0 if CATEGORICAL else 1
                 else:
-                    type_to_int_label[sn_name] = (max(type_to_int_label.values()) if len(type_to_int_label.values()) > 0 else 0) + 1
+                    if CATEGORICAL:
+                        type_to_int_label[sn_name] = (max(type_to_int_label.values()) if len(type_to_int_label.values()) > 0 else 0) + 1
+                    else:
+                        sn_name = "non-Ia"
+                        type_to_int_label[sn_name] = 0
 
             writer.write(image_example(heatmap.flatten().tobytes(), type_to_int_label[sn_name], sn_id))
             done_ids.append(sn_id)

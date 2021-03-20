@@ -17,10 +17,8 @@ def get_images(raw_record, input_shape, categorical): # ASSUMES has ids always
     example = tf.io.parse_single_example(raw_record, image_feature_description)
     image = tf.reshape(tf.io.decode_raw(example['image_raw'], tf.float64), input_shape)
     image = image / tf.reduce_max(image[:,:,0])
-    if not categorical:
-        label = 1 if example['label'] == 0 else 0 # Ia's are labeled as 0 for categorical but change to 1 for binary
 
-    return image, label, example['id']
+    return image, example['label'], example['id']
 
 # balances classes, splits dataset into train/validation/test sets
 # requires:
@@ -80,21 +78,24 @@ def stratified_split(dataset, train_proportion, include_test_set): # ASSUMES has
     val_set = val_set.shuffle(int(full_dataset_size*val_proportion))
 
     if include_test_set:
-        test_set = test_set.shuffle(int(full_dataset_size*val))
+        test_set = test_set.shuffle(int(full_dataset_size*val_proportion))
     return train_set, val_set, test_set
 
 # extract ids from all datasets post-caching
 # requires:
 #   - train_set, val_set, test_set
 #   - extract_ids_from_dataset helper function
-def extract_ids(train_set, val_set, test_set):
+def extract_ids_and_batch(train_set, val_set, test_set, BATCH_SIZE):
     train_ids, train_set = extract_ids_from_dataset(train_set)
     val_ids, val_set = extract_ids_from_dataset(val_set)
     print("makeup of training set: {}".format(get_dataset_makeup(train_set)))
     print("makeup of validation set: {}".format(get_dataset_makeup(val_set)))
+    train_set = train_set.batch(BATCH_SIZE)
+    val_set = val_set.batch(BATCH_SIZE)
     if test_set:
         test_ids, test_set = extract_ids_from_dataset(test_set)
         print("makeup of test set: {}".format(get_dataset_makeup(test_set)))
+        test_set = test_set.batch(BATCH_SIZE)
     else:
         test_ids = None
     

@@ -62,7 +62,7 @@ def define_and_compile_model(input_shape, categorical, num_types):
 #   - get_images
 #   - stratified_split
 #   - extract_ids
-def split_and_retrieve_data(heatmaps_path, train_proportion, include_test_set, input_shape, categorical):
+def split_and_retrieve_data(heatmaps_path, train_proportion, include_test_set, input_shape, categorical, batch_size):
     raw_dataset = tf.data.TFRecordDataset(
         ["{}/{}".format(heatmaps_path, f.name) for f in os.scandir(heatmaps_path) if "tfrecord" in f.name], 
         num_parallel_reads=80)
@@ -74,7 +74,7 @@ def split_and_retrieve_data(heatmaps_path, train_proportion, include_test_set, i
     val_set = val_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
     test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if test_set else None
 
-    return extract_ids(train_set, val_set, test_set)
+    return extract_ids_and_batch(train_set, val_set, test_set, batch_size)
 
 # train the model, returns trained model & training log
 # requires:
@@ -82,19 +82,23 @@ def split_and_retrieve_data(heatmaps_path, train_proportion, include_test_set, i
 #   - train_set, val_set
 #   - NUM_EPOCHS
 #   - batch_size
-def train(model, train_set, val_set, batch_size, num_epochs):
-    train_set = train_set.batch(batch_size)
-    val_set = val_set.batch(batch_size)
-
+def train(model, train_set, val_set, num_epochs):
     history = model.fit(
         train_set,
         epochs=num_epochs,
         validation_data=val_set,
-        verbose=1)
+        verbose=0)
 
     return model, history
 
-def test(model, test_set, batch_size):
-    test_set = test_set.batch(batch_size)
+def get_predictions(model, dataset, dataset_ids, categorical):
+    predictions = model.predict(dataset, verbose=0)
+    if categorical:
+        predictions = np.argmax(predictions, axis=1) #TODO: is this the best way to return categorical results?
+    predictions = predictions.flatten()
+    df_dict = {'snid': dataset_ids, 'pred': predictions}
+    return df_dict
+
+def test(model, test_set):
     results = model.evaluate(test_set)
-    print("test loss: {}, test accuracy: {}".format(test_results[0], test_results[1]))
+    return results[1]
