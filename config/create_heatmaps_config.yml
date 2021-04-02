@@ -1,12 +1,12 @@
-metadata_paths:
-  - "/global/cscratch1/sd/helenqu/plasticc_test_data/metadata_0.csv"
-  - "/global/cscratch1/sd/helenqu/plasticc_test_data/metadata_1.csv"
-lcdata_paths:
-  - "/global/cscratch1/sd/helenqu/plasticc_test_data/lcdata_0.csv"
-  - "/global/cscratch1/sd/helenqu/plasticc_test_data/lcdata_1.csv"
-input_path: #alternatively, pass in a dir path and look for PHOT and HEAD files in dir
-ids_path: "/global/cscratch1/sd/helenqu/plasticc_test_heatmaps/no_ttfd_snr_5/32_x_90_heatmaps/peak-50+130_cuts_from_full_ids.hdf5"
-output_path: "/global/homes/h/helenqu/test_tfrecord"
+# metadata_paths:
+  # - "/global/cscratch1/sd/helenqu/plasticc_test_data/metadata_0.csv"
+  # - "/global/cscratch1/sd/helenqu/plasticc_test_data/metadata_1.csv"
+# lcdata_paths:
+  # - "/global/cscratch1/sd/helenqu/plasticc_test_data/lcdata_0.csv"
+  # - "/global/cscratch1/sd/helenqu/plasticc_test_data/lcdata_1.csv"
+input_path: "/global/cscratch1/sd/helenqu/plasticc_sdss_filters_csv"
+ids_path: "/global/cscratch1/sd/helenqu/plasticc_sdss_filters_heatmaps/0_5_Ia_split_heatmaps_ids.hdf5"
+heatmaps_path: "/global/cscratch1/sd/helenqu/plasticc_sdss_filters_heatmaps"
 
 num_wavelength_bins: 32
 num_mjd_bins: 180
@@ -21,6 +21,7 @@ categorical_max_per_type: 2000
 save_to_json: True
 # if data_cuts dies in the class balancing phase, skip the apply_cuts if save_to_json was true last run
 from_json: False
+categorical: False
 
 sn_type_id_to_name:
   42: "SNII"

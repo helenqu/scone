@@ -10,7 +10,6 @@ from data_utils import *
 class SconeClassifier():
     def __init__(self, config):
         self.heatmaps_path = config['heatmaps_path']
-        self.output_path = config['output_path']
         self.batch_size = config.get('batch_size', 32)
         self.num_epochs = config['num_epochs']
         self.input_shape = (config['num_wavelength_bins'], config['num_mjd_bins'], 2)

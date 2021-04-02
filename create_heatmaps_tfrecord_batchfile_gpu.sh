@@ -3,6 +3,7 @@
 #SBATCH -N 1
 #SBATCH -G 1
 #SBATCH -c 20
-#SBATCH --time=04:00:00
-#SBATCH --array=31,35-36,39,81
-srun /global/homes/h/helenqu/create_heatmaps/create_heatmaps_tfrecord_shellscript.sh
+#SBATCH --time=01:00:00
+
+module load tensorflow/gpu-2.2.0-py37
+srun python run_model.py --config_path config/plasticc_test_calculated_peakmjd.yml
