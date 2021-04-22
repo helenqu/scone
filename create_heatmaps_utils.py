@@ -122,7 +122,6 @@ def get_predictions_heatmap(gp, peak_mjd, mjd_bins, wavelength_bins, milkyway_eb
     #This makes a new array of time which has 0.5 day cadence
     times = np.linspace(peak_mjd-50, peak_mjd+130, mjd_bins)
 
-    #This makes a new array in wavelength space which has a cadence of 20 Ang
     wavelengths = np.linspace(3000.0, 10100.0, wavelength_bins)
     ext = get_extinction(milkyway_ebv, wavelengths)
     ext = np.tile(np.expand_dims(ext, axis=1), len(times))
@@ -237,6 +236,12 @@ def run(config, index):
                 4: 8590.90,
                 5: 9710.28
             }
+
+            if "z_obs" in sn_metadata.columns: # augmented
+                z_obs = sn_metadata['z_obs'].iloc[0]
+                z_sim = sn_metadata['z_sim'].iloc[0]
+                band_to_wave = {k:v*(1+z_sim/1+z_obs) for k,v in band_to_wave}
+
             wave = [band_to_wave[elem] for elem in sn_data['passband']]
 
             gp = build_gp(20, sn_data, wave)

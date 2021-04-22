@@ -14,9 +14,14 @@ args = parser.parse_args()
 # LOAD CONFIG
 with open(args.config_path, "r") as cfgfile:
     config = yaml.load(cfgfile)
-METADATA_PATHS = config["metadata_paths"]
-LCDATA_PATHS = config["lcdata_paths"]
-OUTPUT_PATH = config["output_path"]
+
+if "input_path" in config:
+    METADATA_PATHS = [f.path for f in os.scandir(config["input_path"]) if "HEAD.csv" in f.name and not f.name.startswith('.')]
+    LCDATA_PATHS = [path.replace("HEAD", "PHOT") for path in METADATA_PATHS]
+else:
+    METADATA_PATHS = config["metadata_paths"]
+    LCDATA_PATHS = config["lcdata_paths"]
+OUTPUT_PATH = config["heatmaps_path"]
 SN_TYPE_ID_MAP = config["sn_type_id_to_name"]
 IA_FRACTION = config["Ia_fraction"]
 CATEGORICAL_MIN_PER_TYPE = config["categorical_min_per_type"]
@@ -25,11 +30,38 @@ CATEGORICAL_MAX_PER_TYPE = config["categorical_max_per_type"]
 if not os.path.exists(OUTPUT_PATH):
     os.makedirs(OUTPUT_PATH, exist_ok=True)
 
-SAVE_TO_JSON = config["save_to_json"]
-FROM_JSON = config["from_json"]
+SAVE_TO_JSON = config.get("save_to_json", False)
+FROM_JSON = config.get("from_json", False)
+
+def calculate_detections(lcdata):
+    snrs = lcdata['flux']/lcdata['flux_err']
+    detections = np.where(snrs > 5, 1, 0)
+    return detections
+
+def calculate_peakmjd(metadata, lcdata):
+    peak_mjd_calculated = []
+    for snid in metadata['object_id']:
+        sn_data = lcdata.loc['object_id', snid]
+        sn_metadata = metadata[metadata['object_id'] == snid]
+
+        mjd = np.array(sn_data['mjd'])
+        flux = np.array(sn_data['flux'])
+        flux_err = np.array(sn_data['flux_err'])
+        snrs = flux**2 / flux_err**2
+        mask = snrs > 5
+        mjd = mjd[mask]
+        snrs = snrs[mask]
+        if len(mjd) == 0 or len(snrs) == 0:
+            print(snid)
+        peak_mjd_calculated.append(np.sum(mjd * snrs) / np.sum(snrs))
+    return peak_mjd_calculated
 
 def apply_cuts(metadata, lcdata, thresholds):
-    sn_ids = metadata[(metadata.true_target.isin(SN_TYPE_ID_MAP.keys()))]['object_id']
+    if "ddf" in metadata.columns:
+        sn_ids = metadata[(metadata.ddf == 1) & (metadata.true_target.isin(SN_TYPE_ID_MAP.keys()))]['object_id']
+    else:
+        sn_ids = metadata[metadata.true_target.isin(SN_TYPE_ID_MAP.keys())]['object_id']
+
     metadata = metadata[metadata['object_id'].isin(sn_ids)]
     if thresholds != None:
         first_detection_threshold, num_detections_threshold, snr_threshold, active_time_threshold = thresholds
@@ -37,7 +69,7 @@ def apply_cuts(metadata, lcdata, thresholds):
     passed_cuts_by_type = {}
     passed_cuts = []
     not_passed_cuts = []
-    no_detections = []
+    no_detections = {}
 
     for sn_id in sn_ids:
         sn_id = int(sn_id)
@@ -46,35 +78,35 @@ def apply_cuts(metadata, lcdata, thresholds):
         total_by_type[sn_name] = 1 if sn_name not in total_by_type else total_by_type[sn_name] + 1
 
         peak_mjd = metadata['true_peakmjd'][metadata['object_id'] == sn_id].iloc[0]
-        if 'detected_bool' in lcdata.columns:
-            sn_data = lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband', 'detected_bool']
-            # evaluate lightcurve quality -- time between detections / non-detections
-            detections = np.sort(np.array(sn_data[sn_data['detected_bool'] == 1]['mjd']))
-            non_detections = np.sort(np.array(sn_data[sn_data['detected_bool'] == 0]['mjd']))
-            if len(detections) == 0:
-                no_detections.append(sn_id)
-                continue
-            first_detection = detections[0]
-            last_detection = detections[-1]
-            non_detections_before = [x for x in non_detections if x < first_detection]
-            non_detections_after = [x for x in non_detections if x > last_detection]
-            
-            time_to_first_detection = (first_detection - non_detections_before[-1]) if len(non_detections_before) > 0 else 100
-            time_after_last_detection = (non_detections_after[0] - last_detection) if len(non_detections_after) > 0 else 100
+        sn_data = lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband', 'detected_bool']
+        # evaluate lightcurve quality -- time between detections / non-detections
+        detections = np.sort(np.array(sn_data[sn_data['detected_bool'] == 1]['mjd']))
+        non_detections = np.sort(np.array(sn_data[sn_data['detected_bool'] == 0]['mjd']))
+        if len(detections) == 0:
+            if sn_name not in no_detections:
+                no_detections[sn_name] = [sn_id]
+            else:
+                no_detections[sn_name].append(sn_id)
+            continue
+        first_detection = detections[0]
+        last_detection = detections[-1]
+        non_detections_before = [x for x in non_detections if x < first_detection]
+        non_detections_after = [x for x in non_detections if x > last_detection]
+        
+        time_to_first_detection = (first_detection - non_detections_before[-1]) if len(non_detections_before) > 0 else 100
+        time_after_last_detection = (non_detections_after[0] - last_detection) if len(non_detections_after) > 0 else 100
 
-            # evaluate lightcurve quality -- number of detections
-            num_detections = len(detections)
-            
-            # evaluate lightcurve quality -- time span of detections
-            active_time = last_detection - first_detection
+        # evaluate lightcurve quality -- number of detections
+        num_detections = len(detections)
+        
+        # evaluate lightcurve quality -- time span of detections
+        active_time = last_detection - first_detection
 
-            small_gap_before_detection = (time_to_first_detection <= first_detection_threshold)
-            enough_detections = (num_detections >= num_detections_threshold)
-            long_active_time = active_time >= active_time_threshold
-            if not small_gap_before_detection or not enough_detections or not long_active_time:
-                continue
-        else:
-            sn_data = lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
+        small_gap_before_detection = (time_to_first_detection <= first_detection_threshold)
+        enough_detections = (num_detections >= num_detections_threshold)
+        long_active_time = active_time >= active_time_threshold
+        if not small_gap_before_detection or not enough_detections or not long_active_time:
+            continue
 
         if thresholds == None:
             passed_cuts.append(np.string_("{}_{}".format(sn_name, sn_id)))
@@ -96,7 +128,7 @@ def apply_cuts(metadata, lcdata, thresholds):
         else:
             not_passed_cuts.append(np.string_("{}_{}".format(sn_name, sn_id)))
     print("total: {}, passed: {}".format(total_by_type, passed_cuts_by_type))
-    print("sn ids with no detections: {}".format(no_detections))
+    print("sn ids with no detections: {}".format({k:len(v) for k,v in no_detections.items()}))
     return np.array(passed_cuts)
 
 if not FROM_JSON:
@@ -104,11 +136,24 @@ if not FROM_JSON:
     passed_cut_ids_with_type = np.array([])
     for i, (metadata_path, lcdata_path) in enumerate(zip(METADATA_PATHS, LCDATA_PATHS)):
         print("processing file {}".format(i))
-        print(metadata_path.split("/")[-1], lcdata_path.split("/")[-1])
+
         metadata = pd.read_csv(metadata_path, compression="gzip") if os.path.splitext(metadata_path)[1] == ".gz" else pd.read_csv(metadata_path)
         lcdata = pd.read_csv(lcdata_path, compression="gzip") if os.path.splitext(lcdata_path)[1] == ".gz" else pd.read_csv(lcdata_path)
+        if 'detected_bool' not in lcdata.columns:
+            detected = calculate_detections(lcdata)
+            lcdata['detected_bool'] = detected
+            lcdata.to_csv(lcdata_path, index=False)
         lcdata = Table.from_pandas(lcdata)
         lcdata.add_index('object_id')
+
+        if 'true_target' not in metadata.columns:
+            print("no true target")
+
+       if 'true_peakmjd' not in metadata.columns:
+            peak_mjd = calculate_peakmjd(metadata, lcdata)
+            metadata['true_peakmjd'] = peak_mjd
+            metadata.to_csv(metadata_path, index=False)
+
         passed_cut_current = apply_cuts(metadata, lcdata, [10000, 5, 10, 30])
         #[50, 5, 10, 30] thresholds = [time to first detection <= 50, num detections >= 5, snr > 10, active time >= 30 days]
         passed_cut_ids_with_type = np.concatenate((passed_cut_ids_with_type, passed_cut_current))
@@ -122,6 +167,7 @@ if not FROM_JSON:
             with open("{}/passed_cuts_{}.json".format(OUTPUT_PATH, i), "w") as f:
                 json.dump(passed_cut_by_type, f)
 
+    print({k: len(v) for k, v in passed_cut_by_type.items()})
     if SAVE_TO_JSON:
         with open("{}/passed_cuts.json".format(OUTPUT_PATH), "w") as f:
             json.dump(passed_cut_by_type, f)

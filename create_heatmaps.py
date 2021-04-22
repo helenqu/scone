@@ -3,6 +3,7 @@ import yaml
 import argparse
 import create_heatmaps_utils
 from multiprocessing import Process
+import time
 
 # TODO: give people the option to use sbatch instead of MP? but how to create system-agnostic sbatch header
 
@@ -22,13 +23,20 @@ if "input_path" in config:
 
 num_paths = len(config["lcdata_paths"])
 
-procs = []
-for i in range(num_paths):
-    proc = Process(target=create_heatmaps_utils.run, args=(config, i))
-    proc.start()
-    procs.append(proc)
-for proc in procs:
-    proc.join() # wait until procs are done
+num_simultaneous_jobs = 1
+for j in range(int(num_paths/num_simultaneous_jobs)+1):
+    start = j*num_simultaneous_jobs
+    end = min(num_paths-1, (j+1)*num_simultaneous_jobs)
+
+    procs = []
+    for i in range(start, end):
+        proc = Process(target=create_heatmaps_utils.run, args=(config, i))
+        proc.start()
+        procs.append(proc)
+    for proc in procs:
+        proc.join() # wait until procs are done
+        print("procs done")
+    time.sleep(2)
 
 failed_procs = []
 for i, proc in enumerate(procs):
@@ -42,7 +50,10 @@ else:
     donefile_info = "CREATE HEATMAPS FAILURE\nindices of failed create heatmaps jobs: {}\ncheck out the LC data files or metadata files at those indices in the config yml at {}\nlogs located at create_heatmaps_i.log, i=failed index".format(failed_procs, args.config_path)
     exit_code = 1
 
-with open(config["donefile"], "w+") as donefile:
+donefile_path = config.get("donefile", os.path.join(config["heatmaps_path"], "done.txt"))
+if not os.path.exists(config["heatmaps_path"]):
+    os.makedirs(config["heatmaps_path"])
+with open(donefile_path, "w+") as donefile:
     donefile.write(donefile_info)
 
 sys.exit(exit_code)
