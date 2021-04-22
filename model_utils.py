@@ -25,18 +25,23 @@ class SconeClassifier():
             # self.num_types = len(np.unique(types))
         self.train_proportion = config.get('train_proportion', 0.8)
         self.use_test_set = True if config["mode"] == "predict" else False
-        self.trained_model = None # TODO: or the location of a saved trained model
-        self.train_set, self.val_set, self.test_set, self.train_ids, self.val_ids, self.test_ids = self._split_and_retrieve_data()
+        self.external_trained_model = config.get("trained_model")
+        self.train_set = self.val_set = self.test_set = None
 
     def run(self):
-        if not self.trained_model:
+        if not self.external_trained_model:
+            self.train_set, self.val_set, self.test_set, self.train_ids, self.val_ids, self.test_ids = self._split_and_retrieve_data()
             _, history = self.train()
+            history = history.history
+        else:
+            self.trained_model = models.load_model(self.external_trained_model)
+            history = {}
         dataset, dataset_ids = self.get_test_set() if self.use_test_set else self.get_train_set()
         preds_dict = self.predict(dataset, dataset_ids)
 
         if self.use_test_set:
             test_acc = self.test()
-            history.history["test_accuracy"] = test_acc
+            history["test_accuracy"] = test_acc
 
         return preds_dict, history
 
@@ -89,7 +94,11 @@ class SconeClassifier():
         if not self.use_test_set:
             raise RuntimeError('no test set in train mode')
         if not self.test_set:
-            self.train_set, self.val_set, self.test_set, self.train_ids, self.val_ids, self.test_ids = self._split_and_retrieve_data()
+            if self.external_trained_model:
+                # load in heatmaps without stratified split
+                self.test_ids, self.test_set = self._retrieve_data()
+            else:
+                self.train_set, self.val_set, self.test_set, self.train_ids, self.val_ids, self.test_ids = self._split_and_retrieve_data()
         return self.test_set, self.test_ids
 
     # defines and compiles, then returns model
@@ -142,6 +151,16 @@ class SconeClassifier():
 
         return model
 
+    def _retrieve_data(self):
+        raw_dataset = tf.data.TFRecordDataset(
+            ["{}/{}".format(self.heatmaps_path, f.name) for f in os.scandir(self.heatmaps_path) if "tfrecord" in f.name], 
+            num_parallel_reads=80)
+        dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical), num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        dataset = dataset.apply(tf.data.experimental.ignore_errors())
+        dataset_ids, dataset = extract_ids_from_dataset(dataset)
+
+        return dataset_ids, dataset.batch(self.batch_size)
+
     # main data retrieval function
     # requires:
     #   - heatmaps_path
@@ -154,6 +173,7 @@ class SconeClassifier():
             num_parallel_reads=80)
         dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical), num_parallel_calls=tf.data.experimental.AUTOTUNE)
         dataset = dataset.apply(tf.data.experimental.ignore_errors())
+        dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE).cache()
 
         train_set, val_set, test_set = stratified_split(dataset, self.train_proportion, self.use_test_set)
         train_set = train_set.prefetch(tf.data.experimental.AUTOTUNE).cache()

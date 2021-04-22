@@ -18,7 +18,7 @@ def get_images(raw_record, input_shape, categorical): # ASSUMES has ids always
     image = tf.reshape(tf.io.decode_raw(example['image_raw'], tf.float64), input_shape)
     image = image / tf.reduce_max(image[:,:,0])
 
-    return image, example['label'], example['id']
+    return image, example['label'], tf.cast(example['id'], tf.int32)
 
 # balances classes, splits dataset into train/validation/test sets
 # requires:

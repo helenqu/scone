@@ -27,10 +27,11 @@ with open(args.config_path, "r") as cfgfile:
 
 preds_dict, history = SconeClassifier(config).run()
 print("######## CLASSIFICATION REPORT ########")
-print("classification finished in {:.2f}min".format((time.time() - start) / 60))
-print("last training accuracy value: {}".format(history.history["accuracy"][-1]))
-print("last validation accuracy value: {}".format(history.history["val_accuracy"][-1]))
-if "test_accuracy" in history.history:
-    print("test accuracy value: {}".format(history.history["test_accuracy"]))
+if "accuracy" in history:
+    print("classification finished in {:.2f}min".format((time.time() - start) / 60))
+    print("last training accuracy value: {}".format(history["accuracy"][-1]))
+    print("last validation accuracy value: {}".format(history["val_accuracy"][-1]))
+if "test_accuracy" in history:
+    print("test accuracy value: {}".format(history["test_accuracy"]))
 
 pd.DataFrame(preds_dict).to_csv(os.path.join(config['output_path'], "predictions.csv"), index=False)
