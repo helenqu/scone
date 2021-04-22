@@ -170,6 +170,12 @@ def run(config, index):
     MJD_BINS = config["num_mjd_bins"]
     IDS_PATH = config["ids_path"] if "ids_path" in config else None
     CATEGORICAL = config["categorical"]
+    finished_filenames_path = os.path.join(OUTPUT_PATH, "finished_filenames.csv")
+    if os.path.exists(finished_filenames_path):
+        finished_filenames = pd.read_csv(finished_filenames_path)
+        if os.path.basename(METADATA_PATH) in finished_filenames:
+            print("file has already been processed, exiting")
+            sys.exit(0)
 
     print("writing to {}".format(OUTPUT_PATH), flush=True)
 
@@ -268,6 +274,11 @@ def run(config, index):
             writer.write(image_example(heatmap.flatten().tobytes(), type_to_int_label[sn_name], sn_id))
             done_ids.append(sn_id)
             done_by_type[sn_name] = 1 if sn_name not in done_by_type else done_by_type[sn_name] + 1
+    if not os.path.exists(finished_filenames_path):
+        pd.DataFrame({"filenames": [os.path.basename(METADATA_PATH)]}).to_csv(finished_filenames_path, index=False)
+    else:
+        finished_filenames = pd.read_csv(finished_filenames_path)
+        finished_filenames.append({"filenames": os.path.basename(METADATA_PATH)}, ignore_index=True).to_csv(finished_filenames_path, index=False)
 
     with open("{}/done.log".format(OUTPUT_PATH), "a+") as f:
         f.write("####### JOB {} REPORT #######\n".format(index))

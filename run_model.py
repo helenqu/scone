@@ -1,9 +1,11 @@
 import os
-from model_utils import SconeClassifier
+import multiprocessing as mp
+from model_utils import SconeClassifier, SconeClassifierIaModels
 import yaml
 import argparse
 import pandas as pd
 import time
+import json
 
 start = time.time()
 # GET CONFIG PATH
@@ -25,6 +27,21 @@ with open(args.config_path, "r") as cfgfile:
 # test_set, test_ids = model.get_test_set()
 # trained_model.predict(test_set, test_ids)
 
+# FOR CROSS-TRAINING/TESTING ON DIFF IA MODELS
+# def run(config, i):
+#     print(config)
+#     _, history = SconeClassifierIaModels(config).run()
+#     with open("{}/history_snoopy_{}.json".format("/global/homes/h/helenqu", i), "w") as outfile:
+#         json.dump(history.history, outfile)
+# procs = []
+# for i in range(config.get("num_simultaneous_runs", 1)):
+#     proc = mp.Process(target=run, args=(config,i))
+#     proc.start()
+#     procs.append(proc)
+# for proc in procs:
+#     proc.join() # wait until procs are done
+#     print("procs done")
+
 # AUTOMATIC: RUNS TRAIN/TEST/PREDICT AS SPECIFIED BY CONFIG
 preds_dict, history = SconeClassifier(config).run()
 
@@ -35,5 +52,3 @@ if "accuracy" in history:
     print("last validation accuracy value: {}".format(history["val_accuracy"][-1]))
 if "test_accuracy" in history:
     print("test accuracy value: {}".format(history["test_accuracy"]))
-
-pd.DataFrame(preds_dict).to_csv(os.path.join(config['output_path'], "predictions.csv"), index=False)

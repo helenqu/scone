@@ -149,7 +149,7 @@ if not FROM_JSON:
         if 'true_target' not in metadata.columns:
             print("no true target")
 
-       if 'true_peakmjd' not in metadata.columns:
+        if 'true_peakmjd' not in metadata.columns:
             peak_mjd = calculate_peakmjd(metadata, lcdata)
             metadata['true_peakmjd'] = peak_mjd
             metadata.to_csv(metadata_path, index=False)
@@ -196,23 +196,25 @@ if IA_FRACTION == "categorical":
     print("number of each type: {}".format(least_sn_type_num))
     print("total heatmaps: {:,}, total unique heatmaps: {:,}".format(len(heatmaps_final), len(np.unique(heatmaps_final))))
 else:
-    Ia_heatmaps = np.unique([id for id in passed_cut_ids_with_type if b"Ia_" in id])
-    non_Ia_heatmaps = np.unique([id for id in passed_cut_ids_with_type if b"Ia_" not in id])
+    Ia_heatmaps = np.unique([np.string_(v[2:-1]) for v in passed_cut_by_type.get("b'SNIa", [])])
+    non_Ia_heatmaps = np.array([np.string_(snid[2:-1]) for k,v in passed_cut_by_type.items() if k != "b'SNIa" for snid in v]).flatten()
 
     total_heatmap_count = len(Ia_heatmaps) + len(non_Ia_heatmaps)
     print("total passed cut heatmaps: {}".format(total_heatmap_count))
     current_Ia_fraction = float(len(Ia_heatmaps)) / total_heatmap_count
+    if current_Ia_fraction != IA_FRACTION:
+        fraction = IA_FRACTION if IA_FRACTION < current_Ia_fraction else 1-IA_FRACTION
+        heatmaps_to_change = Ia_heatmaps if IA_FRACTION < current_Ia_fraction else non_Ia_heatmaps
+        unchanged_heatmaps = non_Ia_heatmaps if IA_FRACTION < current_Ia_fraction else Ia_heatmaps
 
-    fraction = IA_FRACTION if IA_FRACTION < current_Ia_fraction else 1-IA_FRACTION
-    heatmaps_to_change = Ia_heatmaps if IA_FRACTION < current_Ia_fraction else non_Ia_heatmaps
-    unchanged_heatmaps = non_Ia_heatmaps if IA_FRACTION < current_Ia_fraction else Ia_heatmaps
+        num_to_remove = (len(heatmaps_to_change) - fraction*total_heatmap_count)/(1 - fraction)
+        num_to_keep = int(len(heatmaps_to_change) - num_to_remove)
+        heatmaps_final = np.concatenate((unchanged_heatmaps, np.random.choice(heatmaps_to_change, num_to_keep, replace=False)))
 
-    num_to_remove = (len(heatmaps_to_change) - fraction*total_heatmap_count)/(1 - fraction)
-    num_to_keep = int(len(heatmaps_to_change) - num_to_remove)
-    heatmaps_final = np.concatenate((unchanged_heatmaps, np.random.choice(heatmaps_to_change, num_to_keep, replace=False)))
-
-    Ia_heatmaps = [id for id in heatmaps_final if b"Ia_" in id]
-    non_Ia_heatmaps = [id for id in heatmaps_final if b"Ia_" not in id]
+        Ia_heatmaps = [id for id in heatmaps_final if b"Ia_" in id]
+        non_Ia_heatmaps = [id for id in heatmaps_final if b"Ia_" not in id]
+    else:
+        heatmaps_final = np.concatenate((Ia_heatmaps, non_Ia_heatmaps))
     print("number of type Ia heatmaps: {:,}, number of non-Ia heatmaps: {:,}".format(len(Ia_heatmaps), len(non_Ia_heatmaps)))
     print("total heatmaps: {:,}, total unique heatmaps: {:,}".format(len(heatmaps_final), len(np.unique(heatmaps_final))))
 

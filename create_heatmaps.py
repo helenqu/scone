@@ -2,7 +2,7 @@ import os, sys
 import yaml
 import argparse
 import create_heatmaps_utils
-from multiprocessing import Process
+import multiprocessing as mp
 import time
 
 # TODO: give people the option to use sbatch instead of MP? but how to create system-agnostic sbatch header
@@ -23,14 +23,17 @@ if "input_path" in config:
 
 num_paths = len(config["lcdata_paths"])
 
-num_simultaneous_jobs = 1
+num_simultaneous_jobs = mp.cpu_count()
+print("num simultaneous jobs: {}".format(num_simultaneous_jobs))
+print("num paths: {}".format(num_paths))
 for j in range(int(num_paths/num_simultaneous_jobs)+1):
     start = j*num_simultaneous_jobs
-    end = min(num_paths-1, (j+1)*num_simultaneous_jobs)
+    end = min(num_paths, (j+1)*num_simultaneous_jobs)
 
+    print("start: {}, end: {}".format(start, end))
     procs = []
     for i in range(start, end):
-        proc = Process(target=create_heatmaps_utils.run, args=(config, i))
+        proc = mp.Process(target=create_heatmaps_utils.run, args=(config, i))
         proc.start()
         procs.append(proc)
     for proc in procs:

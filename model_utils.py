@@ -71,12 +71,13 @@ class SconeClassifier():
         df_dict = {'snid': dataset_ids, 'pred': predictions}
         return df_dict
 
-    def test(self):
+    def test(self, test_set=None):
         if not self.use_test_set:
             raise RuntimeError('no testing in train mode')
         if not self.trained_model:
             raise RuntimeError('model has not been trained! call `train` on the SconeClassifier instance before test!')
-        results = self.trained_model.evaluate(self.test_set)
+        test_set = test_set or self.test_set
+        results = self.trained_model.evaluate(test_set)
         return results[1]
 
     def get_train_set(self):
@@ -172,6 +173,53 @@ class SconeClassifier():
             num_parallel_reads=80)
         dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical), num_parallel_calls=tf.data.experimental.AUTOTUNE)
         dataset = dataset.apply(tf.data.experimental.ignore_errors())
+
+        train_set, val_set, test_set = stratified_split(dataset, self.train_proportion, self.use_test_set)
+        train_set = train_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
+        val_set = val_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
+        test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if self.use_test_set else None
+
+        return extract_ids_and_batch(train_set, val_set, test_set, self.batch_size)
+
+class SconeClassifierIaModels(SconeClassifier):
+    def __init__(self, config):
+        super().__init__(config)
+        self.external_test_sets = config.get('external_test_sets', None)
+
+    def run(self):
+        if not self.trained_model:
+            _, history = self.train()
+        dataset, dataset_ids = self.get_test_set() if self.use_test_set else self.get_train_set()
+        preds_dict = self.predict(dataset, dataset_ids)
+
+        if self.use_test_set:
+            test_acc = self.test()
+            history.history["test_accuracy"] = test_acc
+
+        if self.external_test_sets:
+            for test_set_dir in self.external_test_sets:
+                Ia_dataset = tf.data.TFRecordDataset(
+                    ["{}/{}".format(test_set_dir, f.name) for f in os.scandir(test_set_dir) if "tfrecord" in f.name],
+                    num_parallel_reads=80)
+
+                Ia_dataset = Ia_dataset.take(20_000)
+                raw_dataset = Ia_dataset.concatenate(self.non_Ia_dataset)
+
+                dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical), num_parallel_calls=tf.data.experimental.AUTOTUNE)
+                dataset = dataset.apply(tf.data.experimental.ignore_errors())
+                dataset = dataset.shuffle(20000).cache()
+                ood_ids, dataset = extract_ids_from_dataset(dataset)
+                test_set = dataset.batch(self.batch_size)
+
+                accuracy = self.test(test_set)
+                history.history[os.path.basename(test_set_dir) + "_test_accuracy"] = accuracy
+
+        return preds_dict, history
+
+    def _split_and_retrieve_data(self):
+        raw_dataset = self._split_and_retrieve_data_multiple_locations()
+        dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical), num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        dataset = dataset.apply(tf.data.experimental.ignore_errors())
         dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE).cache()
 
         train_set, val_set, test_set = stratified_split(dataset, self.train_proportion, self.use_test_set)
@@ -181,3 +229,21 @@ class SconeClassifier():
 
         return extract_ids_and_batch(train_set, val_set, test_set, self.batch_size)
 
+    def _split_and_retrieve_data_multiple_locations(self):
+        nonIa_loc = [path for path in self.heatmaps_path if "non" in path][0]
+        Ia_loc = [path for path in self.heatmaps_path if path != nonIa_loc][0]
+
+        Ia_dataset = tf.data.TFRecordDataset(
+	    ["{}/{}".format(Ia_loc, f.name) for f in os.scandir(Ia_loc) if "tfrecord" in f.name],
+	    num_parallel_reads=80)
+        non_Ia_dataset = tf.data.TFRecordDataset(
+            ["{}/{}".format(nonIa_loc, f.name) for f in os.scandir(nonIa_loc) if "tfrecord" in f.name],
+            num_parallel_reads=80) 
+
+        Ia_dataset = Ia_dataset.shuffle(100_000)
+        non_Ia_dataset = non_Ia_dataset.shuffle(100_000)
+
+        Ia_dataset = Ia_dataset.take(20_000)
+        non_Ia_dataset = non_Ia_dataset.take(20_000)
+        self.non_Ia_dataset = non_Ia_dataset
+        return Ia_dataset.concatenate(non_Ia_dataset)
