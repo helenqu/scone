@@ -7,25 +7,27 @@ import tensorflow as tf
 #   - raw_record
 #   - INPUT_SHAPE
 #   - CATEGORICAL
-def get_images(raw_record, input_shape, categorical): # ASSUMES has ids always
+def get_images(raw_record, input_shape, categorical=False, has_ids=False):
     image_feature_description = {
         'label': tf.io.FixedLenFeature([], tf.int64),
         'image_raw': tf.io.FixedLenFeature([], tf.string),
-        'id': tf.io.FixedLenFeature([], tf.int64)
     }
+    if has_ids: 
+        image_feature_description['id'] = tf.io.FixedLenFeature([], tf.int64)
 
     example = tf.io.parse_single_example(raw_record, image_feature_description)
     image = tf.reshape(tf.io.decode_raw(example['image_raw'], tf.float64), input_shape)
     image = image / tf.reduce_max(image[:,:,0])
 
-    return image, example['label'], tf.cast(example['id'], tf.int32)
+    if has_ids:
+        return image, example['label'], tf.cast(example['id'], tf.int32)
+    return image, example['label']
 
 # balances classes, splits dataset into train/validation/test sets
 # requires:
 #   - dataset
 #   - train_proportion
-#   - val_proportion
-def stratified_split(dataset, train_proportion, include_test_set): # ASSUMES has ids always
+def stratified_split(dataset, train_proportion, include_test_set):
     by_type_data_lists = {}
 
     for i, elem in enumerate(dataset):

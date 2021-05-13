@@ -23,6 +23,7 @@ class SconeClassifier():
             # ids_file.close()
             # self.num_types = len(np.unique(types))
         self.train_proportion = config.get('train_proportion', 0.8)
+        self.has_ids = config.get('has_ids', False)
         self.use_test_set = True if config["mode"] == "predict" else False
         self.external_trained_model = config.get("trained_model")
         self.train_set = self.val_set = self.test_set = None
@@ -50,13 +51,18 @@ class SconeClassifier():
     #   - train_set, val_set
     #   - NUM_EPOCHS
     #   - batch_size
-    def train(self):
+    def train(self, train_set=None, val_set=None):
         model = self._define_and_compile_model()
+        print(model.summary())
+        train_set = train_set if train_set is not None else self.train_set
+        val_set = val_set if val_set is not None else self.val_set
+
+        print("starting to train")
         history = model.fit(
-            self.train_set,
+            train_set,
             epochs=self.num_epochs,
-            validation_data=self.val_set,
-            verbose=0)
+            validation_data=val_set,
+            verbose=1)
 
         self.trained_model = model
         return model, history
@@ -151,15 +157,16 @@ class SconeClassifier():
 
         return model
 
-    def _retrieve_data(self):
+    def _load_dataset():
         raw_dataset = tf.data.TFRecordDataset(
             ["{}/{}".format(self.heatmaps_path, f.name) for f in os.scandir(self.heatmaps_path) if "tfrecord" in f.name], 
             num_parallel_reads=80)
-        dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical), num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        dataset = dataset.apply(tf.data.experimental.ignore_errors())
-        dataset_ids, dataset = extract_ids_from_dataset(dataset)
 
-        return dataset_ids, dataset.batch(self.batch_size)
+        return raw_dataset
+
+    def _retrieve_data(self, raw_dataset):
+        dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical, self.has_ids), num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        return dataset.apply(tf.data.experimental.ignore_errors())
 
     # main data retrieval function
     # requires:
@@ -168,18 +175,20 @@ class SconeClassifier():
     #   - stratified_split
     #   - extract_ids
     def _split_and_retrieve_data(self):
-        raw_dataset = tf.data.TFRecordDataset(
-            ["{}/{}".format(self.heatmaps_path, f.name) for f in os.scandir(self.heatmaps_path) if "tfrecord" in f.name], 
-            num_parallel_reads=80)
-        dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical), num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        dataset = dataset.apply(tf.data.experimental.ignore_errors())
+        dataset = self._retrieve_data(self._load_dataset())
 
         train_set, val_set, test_set = stratified_split(dataset, self.train_proportion, self.use_test_set)
         train_set = train_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         val_set = val_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if self.use_test_set else None
 
-        return extract_ids_and_batch(train_set, val_set, test_set, self.batch_size)
+        if self.has_ids:
+            return extract_ids_and_batch(train_set, val_set, test_set, self.batch_size)
+        else:
+            train_set = train_set.batch(self.batch_size)
+            val_set = val_set.batch(self.batch_size)
+            test_set = test_set.batch(self.batch_size)
+            return train_set, val_set, test_set
 
 class SconeClassifierIaModels(SconeClassifier):
     def __init__(self, config):
@@ -205,7 +214,7 @@ class SconeClassifierIaModels(SconeClassifier):
                 Ia_dataset = Ia_dataset.take(20_000)
                 raw_dataset = Ia_dataset.concatenate(self.non_Ia_dataset)
 
-                dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical), num_parallel_calls=tf.data.experimental.AUTOTUNE)
+                dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical, self.has_ids), num_parallel_calls=tf.data.experimental.AUTOTUNE)
                 dataset = dataset.apply(tf.data.experimental.ignore_errors())
                 dataset = dataset.shuffle(20000).cache()
                 ood_ids, dataset = extract_ids_from_dataset(dataset)
@@ -217,19 +226,24 @@ class SconeClassifierIaModels(SconeClassifier):
         return preds_dict, history
 
     def _split_and_retrieve_data(self):
-        raw_dataset = self._split_and_retrieve_data_multiple_locations()
-        dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical), num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        dataset = dataset.apply(tf.data.experimental.ignore_errors())
-        dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE).cache()
+        Ia_dataset, nonIa_dataset = self._load_dataset_separate_Ia_non()
+        raw_dataset = Ia_dataset.concatenate(non_Ia_dataset).shuffle(400_000)
+        dataset = self._retrieve_data(raw_dataset)
 
         train_set, val_set, test_set = stratified_split(dataset, self.train_proportion, self.use_test_set)
         train_set = train_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         val_set = val_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if self.use_test_set else None
 
-        return extract_ids_and_batch(train_set, val_set, test_set, self.batch_size)
+        if self.has_ids:
+            return extract_ids_and_batch(train_set, val_set, test_set, self.batch_size)
+        else:
+            train_set = train_set.batch(self.batch_size)
+            val_set = val_set.batch(self.batch_size)
+            test_set = test_set.batch(self.batch_size)
+            return train_set, val_set, test_set
 
-    def _split_and_retrieve_data_multiple_locations(self):
+    def _load_dataset_separate_Ia_non(self):
         nonIa_loc = [path for path in self.heatmaps_path if "non" in path][0]
         Ia_loc = [path for path in self.heatmaps_path if path != nonIa_loc][0]
 
@@ -243,7 +257,7 @@ class SconeClassifierIaModels(SconeClassifier):
         Ia_dataset = Ia_dataset.shuffle(100_000)
         non_Ia_dataset = non_Ia_dataset.shuffle(100_000)
 
-        Ia_dataset = Ia_dataset.take(20_000)
-        non_Ia_dataset = non_Ia_dataset.take(20_000)
+        # Ia_dataset = Ia_dataset.take(20_000)
+        # non_Ia_dataset = non_Ia_dataset.take(20_000)
         self.non_Ia_dataset = non_Ia_dataset
-        return Ia_dataset.concatenate(non_Ia_dataset)
+        return Ia_dataset, non_Ia_dataset
