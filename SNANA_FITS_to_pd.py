@@ -53,9 +53,9 @@ def read_fits(fname,drop_separators=False):
     if drop_separators:
         df_phot = df_phot[df_phot.MJD != -777.000]
 
-    df_header = df_header[["SNID", "SNTYPE", "PEAKMJD", "REDSHIFT_FINAL", "MWEBV", "SIM_LIBID"]]
+    df_header = df_header[["SNID", "SNTYPE", "PEAKMJD", "REDSHIFT_FINAL", "MWEBV"]]
     df_phot = df_phot[["SNID", "MJD", "BAND", "FLUXCAL", "FLUXCALERR"]]
-    df_header = df_header.rename(columns={"SNID":"object_id", "SNTYPE": "true_target", "PEAKMJD": "true_peakmjd", "REDSHIFT_FINAL": "true_z", "MWEBV": "mwebv", "SIM_LIBID": "libid"})
+    df_header = df_header.rename(columns={"SNID":"object_id", "SNTYPE": "true_target", "PEAKMJD": "true_peakmjd", "REDSHIFT_FINAL": "true_z", "MWEBV": "mwebv"})
     df_header.replace({"true_target": 
         {120: 42, 20: 42, 121: 42, 21: 42, 122: 42, 22: 42, 130: 62, 30: 62, 131: 62, 31: 62, 101: 90, 1: 90, 102: 52, 2: 52, 104: 64, 4: 64, 103: 95, 3: 95, 191: 67, 91: 67}}, inplace=True)
     df_phot = df_phot.rename(columns={"SNID":"object_id", "MJD": "mjd", "BAND": "passband", "FLUXCAL": "flux", "FLUXCALERR": "flux_err"})
