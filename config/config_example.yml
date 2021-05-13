@@ -17,7 +17,7 @@ num_mjd_bins: 180
 ### CLASS BALANCING ###
 # 0.5 for class-balanced binary split
 # "categorical" for class-balanced categorical split
-Ia_fraction: 0.5 
+Ia_fraction: null 
 
 ### SPECIFIC TO CATEGORICAL SPLIT ###
 # categorical_min_per_type: min number of SNe per type; types with fewer are discarded

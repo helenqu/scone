@@ -118,9 +118,9 @@ def build_gp(guess_length_scale, sn_data, bands):
 
     return gaussian_process
 
-def get_predictions_heatmap(gp, peak_mjd, mjd_bins, wavelength_bins, milkyway_ebv):
+def get_predictions_heatmap(gp, mjd_range, mjd_bins, wavelength_bins, milkyway_ebv):
     #This makes a new array of time which has 0.5 day cadence
-    times = np.linspace(peak_mjd-50, peak_mjd+130, mjd_bins)
+    times = np.linspace(mjd_range[0], mjd_range[1], mjd_bins) 
 
     wavelengths = np.linspace(3000.0, 10100.0, wavelength_bins)
     ext = get_extinction(milkyway_ebv, wavelengths)
@@ -169,6 +169,7 @@ def run(config, index):
     WAVELENGTH_BINS = config["num_wavelength_bins"]
     MJD_BINS = config["num_mjd_bins"]
     IDS_PATH = config["ids_path"] if "ids_path" in config else None
+    HAS_PEAKMJD = config.get("has_peakmjd", True)
     CATEGORICAL = config["categorical"]
     finished_filenames_path = os.path.join(OUTPUT_PATH, "finished_filenames.csv")
     if os.path.exists(finished_filenames_path):
@@ -220,7 +221,9 @@ def run(config, index):
                 done_by_type[sn_name] = 1 if sn_name not in done_by_type else done_by_type[sn_name] + 1
                 continue
             sn_data = lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
-            peak_mjd = sn_metadata['true_peakmjd'].iloc[0]
+            peak_mjd = sn_metadata['true_peakmjd'].iloc[0] if HAS_PEAKMJD else None
+            mjd_range = [peak_mjd-30, peak_mjd+150] if HAS_PEAKMJD else [min(lcdata.mjd), max(lcdata.mjd)]
+
             filter_to_band_number = {
                 "b'u '": 0,
                 "b'g '": 1,
@@ -258,7 +261,7 @@ def run(config, index):
             milkyway_ebv = sn_metadata['mwebv'].iloc[0]
             z = sn_metadata['true_z'].iloc[0]
 
-            predictions, prediction_errs = get_predictions_heatmap(gp, peak_mjd, MJD_BINS, WAVELENGTH_BINS, milkyway_ebv)
+            predictions, prediction_errs = get_predictions_heatmap(gp, mjd_range, MJD_BINS, WAVELENGTH_BINS, milkyway_ebv)
             heatmap = np.dstack((predictions, prediction_errs))
 
             if sn_name not in type_to_int_label:

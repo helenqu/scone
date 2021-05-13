@@ -24,6 +24,7 @@ else:
 OUTPUT_PATH = config["heatmaps_path"]
 SN_TYPE_ID_MAP = config["sn_type_id_to_name"]
 IA_FRACTION = config["Ia_fraction"]
+WANT_PEAKMJD = config.get("has_peakmjd", True)
 CATEGORICAL_MIN_PER_TYPE = config["categorical_min_per_type"]
 CATEGORICAL_MAX_PER_TYPE = config["categorical_max_per_type"]
 
@@ -57,10 +58,7 @@ def calculate_peakmjd(metadata, lcdata):
     return peak_mjd_calculated
 
 def apply_cuts(metadata, lcdata, thresholds):
-    if "ddf" in metadata.columns:
-        sn_ids = metadata[(metadata.ddf == 1) & (metadata.true_target.isin(SN_TYPE_ID_MAP.keys()))]['object_id']
-    else:
-        sn_ids = metadata[metadata.true_target.isin(SN_TYPE_ID_MAP.keys())]['object_id']
+    sn_ids = metadata[metadata.true_target.isin(SN_TYPE_ID_MAP.keys())]['object_id']
 
     metadata = metadata[metadata['object_id'].isin(sn_ids)]
     if thresholds != None:
@@ -77,7 +75,6 @@ def apply_cuts(metadata, lcdata, thresholds):
         sn_name = SN_TYPE_ID_MAP[sn_metadata.true_target.iloc[0]]
         total_by_type[sn_name] = 1 if sn_name not in total_by_type else total_by_type[sn_name] + 1
 
-        peak_mjd = metadata['true_peakmjd'][metadata['object_id'] == sn_id].iloc[0]
         sn_data = lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband', 'detected_bool']
         # evaluate lightcurve quality -- time between detections / non-detections
         detections = np.sort(np.array(sn_data[sn_data['detected_bool'] == 1]['mjd']))
@@ -149,7 +146,7 @@ if not FROM_JSON:
         if 'true_target' not in metadata.columns:
             print("no true target")
 
-        if 'true_peakmjd' not in metadata.columns:
+        if 'true_peakmjd' not in metadata.columns and WANT_PEAKMJD:
             peak_mjd = calculate_peakmjd(metadata, lcdata)
             metadata['true_peakmjd'] = peak_mjd
             metadata.to_csv(metadata_path, index=False)
@@ -175,7 +172,9 @@ else:
     with open("{}/passed_cuts.json".format(OUTPUT_PATH), "r") as infile:
         passed_cut_by_type = json.load(infile)
 
-if IA_FRACTION == "categorical":
+if IA_FRACTION == None:
+    heatmaps_final = [np.string_(id_[2:-1]) for id_ in v for k, v in passed_cut_by_type.items()]
+elif IA_FRACTION == "categorical":
     passed_cut_num_by_type = {k: len(v) for k, v in passed_cut_by_type.items()}
     sorted_types = [k for k, _ in sorted(passed_cut_num_by_type.items(), key=lambda item: item[1])]
 
