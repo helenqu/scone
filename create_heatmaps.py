@@ -23,8 +23,10 @@ if "input_path" in config:
 
 num_paths = len(config["lcdata_paths"])
 
-num_simultaneous_jobs = mp.cpu_count()
-print("num simultaneous jobs: {}".format(num_simultaneous_jobs))
+max_num_simultaneous_jobs = mp.cpu_count()
+num_simultaneous_jobs = max(15, max_num_simultaneous_jobs)
+print("max num simultaneous jobs: {}".format(max_num_simultaneous_jobs))
+print("real num simultaneous jobs: {}".format(num_simultaneous_jobs))
 print("num paths: {}".format(num_paths))
 for j in range(int(num_paths/num_simultaneous_jobs)+1):
     start = j*num_simultaneous_jobs

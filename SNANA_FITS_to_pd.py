@@ -53,12 +53,13 @@ def read_fits(fname,drop_separators=False):
     if drop_separators:
         df_phot = df_phot[df_phot.MJD != -777.000]
 
+    band_colname = "FLT" if "FLT" in df_phot.columns else "BAND" # check for filter column name from different versions of SNANA
     df_header = df_header[["SNID", "SNTYPE", "PEAKMJD", "REDSHIFT_FINAL", "MWEBV"]]
-    df_phot = df_phot[["SNID", "MJD", "BAND", "FLUXCAL", "FLUXCALERR"]]
+    df_phot = df_phot[["SNID", "MJD", band_colname, "FLUXCAL", "FLUXCALERR"]]
     df_header = df_header.rename(columns={"SNID":"object_id", "SNTYPE": "true_target", "PEAKMJD": "true_peakmjd", "REDSHIFT_FINAL": "true_z", "MWEBV": "mwebv"})
     df_header.replace({"true_target": 
         {120: 42, 20: 42, 121: 42, 21: 42, 122: 42, 22: 42, 130: 62, 30: 62, 131: 62, 31: 62, 101: 90, 1: 90, 102: 52, 2: 52, 104: 64, 4: 64, 103: 95, 3: 95, 191: 67, 91: 67}}, inplace=True)
-    df_phot = df_phot.rename(columns={"SNID":"object_id", "MJD": "mjd", "BAND": "passband", "FLUXCAL": "flux", "FLUXCALERR": "flux_err"})
+    df_phot = df_phot.rename(columns={"SNID":"object_id", "MJD": "mjd", band_colname: "passband", "FLUXCAL": "flux", "FLUXCALERR": "flux_err"})
     passband_dict = {"passband": {b'u ': 0, b'g ': 1, b'r ': 2, b'i ': 3, b'z ': 4, b'Y ': 5}}
     print("num rows with unexpected passband: {}".format(df_phot[~df_phot.passband.isin(passband_dict["passband"])]))
     df_phot = df_phot[df_phot.passband.isin(passband_dict["passband"])]
@@ -85,16 +86,16 @@ def save_fits(df, fname):
 
 parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
 parser.add_argument('--fits_dir', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
-parser.add_argument('--output_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
+parser.add_argument('--output_dir', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
 args = parser.parse_args()
 
 fits_paths = [f.path for f in os.scandir(args.fits_dir) if "PHOT.FITS" in f.name]
-if not os.path.exists(args.output_path):
-    os.makedirs(args.output_path)
+if not os.path.exists(args.output_dir):
+    os.makedirs(args.output_dir)
 
 for path in fits_paths:
-    csv_metadata_path = os.path.join(args.output_path, os.path.basename(path).replace("PHOT.FITS.gz", "HEAD.csv"))
-    csv_lcdata_path = os.path.join(args.output_path, os.path.basename(path).replace(".FITS.gz", ".csv"))
+    csv_metadata_path = os.path.join(args.output_dir, os.path.basename(path).replace("PHOT.FITS.gz", "HEAD.csv"))
+    csv_lcdata_path = os.path.join(args.output_dir, os.path.basename(path).replace(".FITS.gz", ".csv"))
 
     metadata, lcdata = read_fits(path)
     if metadata.empty:

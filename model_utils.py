@@ -112,7 +112,7 @@ class SconeClassifier():
     #   - INPUT_SHAPE
     #   - CATEGORICAL
     #   - NUM_TYPES
-    def _define_and_compile_model(self):
+    def _define_and_compile_model(self, metrics=['accuracy']):
         y, x, _ = self.input_shape
         
         model = models.Sequential()
@@ -149,15 +149,16 @@ class SconeClassifier():
         else:
             model.add(layers.Dense(1, activation='sigmoid'))
         
-        opt = optimizers.Adam(learning_rate=1e-3)
+        opt = optimizers.Adam(learning_rate=1e-4)
         loss = 'sparse_categorical_crossentropy' if self.categorical else 'binary_crossentropy'
+        print(metrics)
         model.compile(optimizer=opt,
                       loss=loss,
-                      metrics=['accuracy'])
+                      metrics=metrics)
 
         return model
 
-    def _load_dataset():
+    def _load_dataset(self):
         raw_dataset = tf.data.TFRecordDataset(
             ["{}/{}".format(self.heatmaps_path, f.name) for f in os.scandir(self.heatmaps_path) if "tfrecord" in f.name], 
             num_parallel_reads=80)
