@@ -167,7 +167,7 @@ class SconeClassifier():
 
     def _retrieve_data(self, raw_dataset):
         dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical, self.has_ids), num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        self.types = [0,1] if not self.categorical else tf.unique(dataset.map(lambda image, label, *_: label))[0].numpy()
+        self.types = [0,1] if not self.categorical else np.unique([data[1] for data in dataset])
 
         return dataset.apply(tf.data.experimental.ignore_errors())
 
