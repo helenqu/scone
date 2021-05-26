@@ -27,55 +27,47 @@ def get_images(raw_record, input_shape, categorical=False, has_ids=False):
 # requires:
 #   - dataset
 #   - train_proportion
-def stratified_split(dataset, train_proportion, include_test_set):
-    by_type_data_lists = {}
+def stratified_split(dataset, train_proportion, types, include_test_set, has_ids=False):
+    #TODO: can we get rid of the dependency on has_ids?
+    if has_ids:
+        by_type_data_lists = {sn_type: dataset.filter(lambda image, label, id: label == sn_type) for sn_type in types}
+    else:
+        by_type_data_lists = {sn_type: dataset.filter(lambda image, label: label == sn_type) for sn_type in types}
 
-    for i, elem in enumerate(dataset):
-        sn_type = elem[1].numpy()
-        heatmap = elem[0].numpy()
-
-        # construct mapping from type to all heatmaps/ids of that type
-        if sn_type in by_type_data_lists:
-            by_type_data_lists[sn_type] = np.append(by_type_data_lists[sn_type], [[elem[2].numpy(), heatmap]], axis=0)
-        else:
-            by_type_data_lists[sn_type] = np.array([[elem[2].numpy(), heatmap]])
-    # mapping from type to number of heatmaps of that type
-    by_type_data_lengths = {k: len(v) for k,v in by_type_data_lists.items()}
-
-    # if classes not balanced, balance them 
-    if np.amax(list(by_type_data_lengths.values())) != np.amin(list(by_type_data_lengths.values())):
-        generator = np.random.default_rng()
-        num_to_keep = np.amin(list(by_type_data_lengths.values()))
-        print("classes not balanced: max num {}, min num {}".format(np.amax(list(by_type_data_lengths.values())), num_to_keep))
-        for sn_type, sn_data in by_type_data_lists.items():
-            by_type_data_lists[sn_type] = generator.choice(sn_data, num_to_keep, replace=False)
-            print("type {} has {} examples".format(sn_type, len(by_type_data_lists[sn_type])))
+    by_type_data_lengths = {k: sum([1 for _ in v]) for k,v in by_type_data_lists}
+    print(f"number of samples per label: {by_type_data_lengths}")
+    min_amount = min(by_type_data_lengths.values())
+    print(f"min number of samples: {min_amount}")
+    num_in_train = int(min_amount * train_proportion)
+    print(f"expected train set size: {num_in_train * len(by_type_data_lengths.keys())}")
+    val_proportion = 0.5*(1-train_proportion) if include_test_set else 1-train_proportion
+    num_in_val = int(min_amount * val_proportion)
+    print(f"expected val set size: {num_in_val * len(by_type_data_lengths.keys())}")
 
     train_set = None
     val_set = None
     test_set = None
     #TODO: make this no test set flow less ugly
-    val_proportion = 0.5*(1-train_proportion) if include_test_set else 1-train_proportion
-    # make a TF dataset from all heatmaps/ids of each type
     for sntype, data in by_type_data_lists.items():
-        dataset = tf.data.Dataset.from_tensor_slices((tf.stack(data[:,1], axis=0), [sntype]*len(data), list(data[:,0].astype(np.int32))))
-        dataset = dataset.shuffle(len(data))
-
         # take from each with correct proportion to make stratified split train/val/test
-        if train_set != None:
-            train_set = train_set.concatenate(dataset.take(int(len(data)*train_proportion)))
-            test_val_set = dataset.skip(int(len(data)*train_proportion))
-            val_set = val_set.concatenate(test_val_set.take(int(len(data)*val_proportion)))
-            if include_test_set:
-                test_set = test_set.concatenate(test_val_set.skip(int(len(data)*val_proportion)))
-        else:
-            train_set = dataset.take(int(len(data)*train_proportion))
-            test_val_set = dataset.skip(int(len(data)*train_proportion))
-            val_set = test_val_set.take(int(len(data)*val_proportion))
-            if include_test_set:
-                test_set = test_val_set.skip(int(len(data)*val_proportion))
+        data = data.shuffle(by_type_data_lengths[sn_type])
+        current_train = data.take(num_in_train)
+        current_test_val = data.skip(num_in_train)
+        current_val = current_test_val if not include_test_set else current_test_val.take(num_in_val)
+        current_test = None if not include_test_set else current_test_val.skip(num_in_val)
 
-    full_dataset_size = len(data)*len(by_type_data_lists.keys()) #full dataset size = heatmaps per type * num types
+        if train_set != None:
+            train_set = train_set.concatenate(current_train)
+            val_set = val_set.concatenate(current_val)
+            if include_test_set:
+                test_set = test_set.concatenate(current_test)
+        else:
+            train_set = current_train 
+            val_set = current_val
+            if include_test_set:
+                test_set = current_test
+
+    full_dataset_size = min_amount * len(by_type_data_lists.keys()) #full dataset size = heatmaps per type * num types
     train_set = train_set.shuffle(full_dataset_size)
     val_set = val_set.shuffle(int(full_dataset_size*val_proportion))
 

@@ -24,7 +24,7 @@ if "input_path" in config:
 num_paths = len(config["lcdata_paths"])
 
 max_num_simultaneous_jobs = mp.cpu_count()
-num_simultaneous_jobs = max(15, max_num_simultaneous_jobs)
+num_simultaneous_jobs = min(15, max_num_simultaneous_jobs)
 print("max num simultaneous jobs: {}".format(max_num_simultaneous_jobs))
 print("real num simultaneous jobs: {}".format(num_simultaneous_jobs))
 print("num paths: {}".format(num_paths))
