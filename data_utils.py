@@ -27,12 +27,8 @@ def get_images(raw_record, input_shape, categorical=False, has_ids=False):
 # requires:
 #   - dataset
 #   - train_proportion
-def stratified_split(dataset, train_proportion, types, include_test_set, has_ids=False):
-    #TODO: can we get rid of the dependency on has_ids?
-    if has_ids:
-        by_type_data_lists = {sn_type: dataset.filter(lambda image, label, id: label == sn_type) for sn_type in types}
-    else:
-        by_type_data_lists = {sn_type: dataset.filter(lambda image, label: label == sn_type) for sn_type in types}
+def stratified_split(dataset, train_proportion, types, include_test_set):
+    by_type_data_lists = {sn_type: dataset.filter(lambda image, label, *_: label == sn_type) for sn_type in types}
 
     by_type_data_lengths = {k: sum([1 for _ in v]) for k,v in by_type_data_lists}
     print(f"number of samples per label: {by_type_data_lengths}")

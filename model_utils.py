@@ -167,7 +167,7 @@ class SconeClassifier():
 
     def _retrieve_data(self, raw_dataset):
         dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical, self.has_ids), num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        self.types = [0,1] if not self.categorical else tf.unique(dataset.map(lambda image, label: label))[0].numpy()
+        self.types = [0,1] if not self.categorical else np.unique([data[1] for data in dataset])
 
         return dataset.apply(tf.data.experimental.ignore_errors())
 
@@ -180,7 +180,7 @@ class SconeClassifier():
     def _split_and_retrieve_data(self):
         dataset = self._retrieve_data(self._load_dataset())
 
-        train_set, val_set, test_set = stratified_split(dataset, self.train_proportion, self.types, self.use_test_set, self.has_ids)
+        train_set, val_set, test_set = stratified_split(dataset, self.train_proportion, self.types, self.use_test_set)
         train_set = train_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         val_set = val_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if self.use_test_set else None
@@ -233,7 +233,7 @@ class SconeClassifierIaModels(SconeClassifier):
         raw_dataset = Ia_dataset.concatenate(non_Ia_dataset).shuffle(400_000)
         dataset = self._retrieve_data(raw_dataset)
 
-        train_set, val_set, test_set = stratified_split(dataset, self.train_proportion, self.use_test_set)
+        train_set, val_set, test_set = stratified_split(dataset, self.train_proportion, self.types, self.use_test_set)
         train_set = train_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         val_set = val_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if self.use_test_set else None
