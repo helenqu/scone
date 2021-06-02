@@ -29,7 +29,7 @@ def get_images(raw_record, input_shape, categorical=False, has_ids=False):
 #   - train_proportion
 def stratified_split(dataset, train_proportion, types, include_test_set):
     by_type_data_lists = {sn_type: dataset.filter(lambda image, label, *_: label == sn_type) for sn_type in types}
-
+    print(by_type_data_lists)
     by_type_data_lengths = {k: sum([1 for _ in v]) for k,v in by_type_data_lists}
     print(f"number of samples per label: {by_type_data_lengths}")
     min_amount = min(by_type_data_lengths.values())

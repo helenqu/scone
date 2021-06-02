@@ -9,6 +9,7 @@ import time
 
 parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
 parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
+parser.add_argument('--index', type=int, help='index of single lc file you wish to create heatmaps for within your config file, i.e. 4')
 args = parser.parse_args()
 
 def load_config(config_path):
@@ -28,20 +29,33 @@ num_simultaneous_jobs = min(15, max_num_simultaneous_jobs)
 print("max num simultaneous jobs: {}".format(max_num_simultaneous_jobs))
 print("real num simultaneous jobs: {}".format(num_simultaneous_jobs))
 print("num paths: {}".format(num_paths))
-for j in range(int(num_paths/num_simultaneous_jobs)+1):
-    start = j*num_simultaneous_jobs
-    end = min(num_paths, (j+1)*num_simultaneous_jobs)
 
-    print("start: {}, end: {}".format(start, end))
-    procs = []
-    for i in range(start, end):
-        proc = mp.Process(target=create_heatmaps_utils.run, args=(config, i))
-        proc.start()
-        procs.append(proc)
-    for proc in procs:
-        proc.join() # wait until procs are done
-        print("procs done")
-    time.sleep(2)
+### For single lc file ###
+print('Running single path')
+procs = []
+proc = mp.Process(target=create_heatmaps_utils.run, args=(config, args.index))
+proc.start()
+procs.append(proc)
+
+for proc in procs:
+    proc.join() # wait until procs are done
+print("procs done")
+
+### For multiple lc files ###
+#for j in range(int(num_paths/num_simultaneous_jobs)+1):
+ #   start = j*num_simultaneous_jobs
+  #  end = min(num_paths, (j+1)*num_simultaneous_jobs)
+
+   # print("start: {}, end: {}".format(start, end))
+    #procs = []
+    #for i in range(start, end):
+     #   proc = mp.Process(target=create_heatmaps_utils.run, args=(config, i))
+      #  proc.start()
+       # procs.append(proc)
+    #for proc in procs:
+     #   proc.join() # wait until procs are done
+      #  print("procs done")
+    #time.sleep(2)
 
 failed_procs = []
 for i, proc in enumerate(procs):
