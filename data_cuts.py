@@ -59,10 +59,7 @@ def calculate_peakmjd(metadata, lcdata):
 
 def apply_cuts(metadata, lcdata, thresholds):
     sn_ids = metadata[metadata.true_target.isin(SN_TYPE_ID_MAP.keys())]['object_id']
-    lc_ids = lcdata['object_id']
-    unique_lcids = np.array(np.unique(lc_ids))
-    sn_ids = np.intersect1d(sn_ids,unique_lcids)
-    
+
     metadata = metadata[metadata['object_id'].isin(sn_ids)]
     if thresholds != None:
         first_detection_threshold, num_detections_threshold, snr_threshold, active_time_threshold = thresholds
@@ -168,15 +165,15 @@ if not FROM_JSON:
                 json.dump(passed_cut_by_type, f)
 
     print({k: len(v) for k, v in passed_cut_by_type.items()})
-if SAVE_TO_JSON:
-    with open("{}/passed_cuts.json".format(OUTPUT_PATH), "w") as f:
-        json.dump(passed_cut_by_type, f)
+    if SAVE_TO_JSON:
+        with open("{}/passed_cuts.json".format(OUTPUT_PATH), "w") as f:
+            json.dump(passed_cut_by_type, f)
 else:
     with open("{}/passed_cuts.json".format(OUTPUT_PATH), "r") as infile:
         passed_cut_by_type = json.load(infile)
 
 if IA_FRACTION == None:
-    heatmaps_final = [np.string_(id_[2:-1]) for k, v in passed_cut_by_type.items() for id_ in v]
+    heatmaps_final = [np.string_(id_[2:-1]) for id_ in v for k, v in passed_cut_by_type.items()]
 elif IA_FRACTION == "categorical":
     passed_cut_num_by_type = {k: len(v) for k, v in passed_cut_by_type.items()}
     sorted_types = [k for k, _ in sorted(passed_cut_num_by_type.items(), key=lambda item: item[1])]
@@ -204,7 +201,7 @@ else:
     total_heatmap_count = len(Ia_heatmaps) + len(non_Ia_heatmaps)
     print("total passed cut heatmaps: {}".format(total_heatmap_count))
     current_Ia_fraction = float(len(Ia_heatmaps)) / total_heatmap_count
-    if current_Ia_fraction != IA_FRACTION and IA_FRACTION != "categorial":
+    if current_Ia_fraction != IA_FRACTION:
         fraction = IA_FRACTION if IA_FRACTION < current_Ia_fraction else 1-IA_FRACTION
         heatmaps_to_change = Ia_heatmaps if IA_FRACTION < current_Ia_fraction else non_Ia_heatmaps
         unchanged_heatmaps = non_Ia_heatmaps if IA_FRACTION < current_Ia_fraction else Ia_heatmaps
