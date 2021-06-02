@@ -21,6 +21,7 @@ SBATCH_FILE = "/global/homes/h/helenqu/scone_shellscripts/autogen_heatmaps_batch
 
 parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
 parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
+parser.add_argument('--index', type=int, help='index of single lc file you wish to create heatmaps for within your config file, i.e. 4')
 args = parser.parse_args()
 
 def load_config(config_path):
@@ -40,21 +41,3 @@ num_paths = len(config["lcdata_paths"])
 num_simultaneous_jobs = 16 # haswell has 16 physical cores
 print("num simultaneous jobs: {}".format(num_simultaneous_jobs))
 print("num paths: {}".format(num_paths))
-for j in range(int(num_paths/num_simultaneous_jobs)+1):
-    start = j*num_simultaneous_jobs
-    end = min(num_paths, (j+1)*num_simultaneous_jobs)
-
-    print("start: {}, end: {}".format(start, end))
-    sbatch_setup_dict = {
-        "scone_path": os.path.dirname(__file__), # parent directory of this file
-        "config_path": args.config_path,
-        "index": j,
-        "start": start,
-        "end": end
-    }
-    sbatch_setup = SBATCH_HEADER.format(**sbatch_setup_dict)
-    sbatch_file = SBATCH_FILE.format(**{"index": j})
-    with open(sbatch_file, "w+") as f:
-        f.write(sbatch_setup)
-    print(f"launching job {j} from {start} to {end}")
-    subprocess.run(["sbatch", sbatch_file])
