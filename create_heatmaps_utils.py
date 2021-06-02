@@ -207,7 +207,8 @@ def run(config, index):
     removed_by_type = {}
     done_ids = []
 
-    type_to_int_label = {}
+    type_to_int_label = {} if not CATEGORICAL else {v:i for i,v in enumerate(sorted(SN_TYPE_ID_MAP.values()))}
+    print(f"type to int label: {type_to_int_label}")
 
     with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(OUTPUT_PATH, index)) as writer:
         for i, sn_id in enumerate(lcdata_ids):
@@ -271,14 +272,10 @@ def run(config, index):
             heatmap = np.dstack((predictions, prediction_errs))
 
             if sn_name not in type_to_int_label:
-                if sn_name == "SNIa" or sn_name == "Ia":
-                    type_to_int_label[sn_name] = 0 if CATEGORICAL else 1
-                else:
-                    if CATEGORICAL:
-                        type_to_int_label[sn_name] = (max(type_to_int_label.values()) if len(type_to_int_label.values()) > 0 else 0) + 1
-                    else:
-                        sn_name = "non-Ia"
-                        type_to_int_label[sn_name] = 0
+                if CATEGORICAL:
+                    print(f"{sn_name} not in SN_TYPE_ID_MAP?? stopping now")
+                    break
+                type_to_int_label[sn_name] = 1 if sn_name == "SNIa" or sn_name == "Ia" else 0
 
             writer.write(image_example(heatmap.flatten().tobytes(), type_to_int_label[sn_name], sn_id))
             done_ids.append(sn_id)
