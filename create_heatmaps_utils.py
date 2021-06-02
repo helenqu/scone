@@ -172,6 +172,7 @@ def run(config, index):
     HAS_PEAKMJD = config.get("has_peakmjd", True)
     CATEGORICAL = config["categorical"]
     finished_filenames_path = os.path.join(OUTPUT_PATH, "finished_filenames.csv")
+    print('Processing file: ' + str(LCDATA_PATH))
     if os.path.exists(finished_filenames_path):
         finished_filenames = pd.read_csv(finished_filenames_path)
         if os.path.basename(METADATA_PATH) in finished_filenames:
@@ -185,6 +186,9 @@ def run(config, index):
     lcdata_ids = metadata[metadata.true_target.isin(SN_TYPE_ID_MAP.keys())].object_id
     lcdata = Table.from_pandas(lcdata)
     lcdata.add_index('object_id')
+
+    lcdata_ids = np.intersect1d(lcdata['object_id'], lcdata_ids)
+    
     if IDS_PATH:
         ids_file = h5py.File(IDS_PATH, "r")
         ids = [x.decode('utf-8') for x in ids_file["names"]]
@@ -207,6 +211,11 @@ def run(config, index):
         for i, sn_id in enumerate(lcdata_ids):
             if i % 1000 == 0:
                 print("job {}: processing {} of {}".format(index, i, len(lcdata_ids)), flush=True)
+            if i==0:
+                print('0')
+            else:
+                print(time.time()-prev)
+            prev = time.time()
             sn_id = int(sn_id)
             sn_metadata = metadata[metadata.object_id == sn_id]
 
@@ -222,7 +231,7 @@ def run(config, index):
                 continue
             sn_data = lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
             peak_mjd = sn_metadata['true_peakmjd'].iloc[0] if HAS_PEAKMJD else None
-            mjd_range = [peak_mjd-30, peak_mjd+150] if HAS_PEAKMJD else [min(lcdata.mjd), max(lcdata.mjd)]
+            mjd_range = [peak_mjd-30, peak_mjd+150] if HAS_PEAKMJD else [np.min(sn_data['mjd']), np.max(sn_data['mjd'])]
 
             filter_to_band_number = {
                 "b'u '": 0,
