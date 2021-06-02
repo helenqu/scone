@@ -172,7 +172,9 @@ def run(config, index):
     HAS_PEAKMJD = config.get("has_peakmjd", True)
     CATEGORICAL = config["categorical"]
     finished_filenames_path = os.path.join(OUTPUT_PATH, "finished_filenames.csv")
+
     print('Processing file: ' + str(LCDATA_PATH))
+
     if os.path.exists(finished_filenames_path):
         finished_filenames = pd.read_csv(finished_filenames_path)
         if os.path.basename(METADATA_PATH) in finished_filenames:
@@ -183,11 +185,11 @@ def run(config, index):
 
     metadata = pd.read_csv(METADATA_PATH, compression="gzip") if os.path.splitext(METADATA_PATH)[1] == ".gz" else pd.read_csv(METADATA_PATH)
     lcdata = pd.read_csv(LCDATA_PATH, compression="gzip") if os.path.splitext(LCDATA_PATH)[1] == ".gz" else pd.read_csv(LCDATA_PATH)
-    lcdata_ids = metadata[metadata.true_target.isin(SN_TYPE_ID_MAP.keys())].object_id
+    metadata_ids = metadata[metadata.true_target.isin(SN_TYPE_ID_MAP.keys())].object_id
     lcdata = Table.from_pandas(lcdata)
     lcdata.add_index('object_id')
 
-    lcdata_ids = np.intersect1d(lcdata['object_id'], lcdata_ids)
+    lcdata_ids = np.intersect1d(lcdata['object_id'], metadata_ids)
     
     if IDS_PATH:
         ids_file = h5py.File(IDS_PATH, "r")
@@ -211,11 +213,6 @@ def run(config, index):
         for i, sn_id in enumerate(lcdata_ids):
             if i % 1000 == 0:
                 print("job {}: processing {} of {}".format(index, i, len(lcdata_ids)), flush=True)
-            if i==0:
-                print('0')
-            else:
-                print(time.time()-prev)
-            prev = time.time()
             sn_id = int(sn_id)
             sn_metadata = metadata[metadata.object_id == sn_id]
 

@@ -68,8 +68,10 @@ class SconeClassifier():
         return model, history
 
     def predict(self, dataset, dataset_ids):
-        if not self.trained_model:
+        if not self.external_trained_model:
             raise RuntimeError('model has not been trained! call `train` on the SconeClassifier instance before predict!')
+        self.trained_model = models.load_model(self.external_trained_model)
+
         predictions = self.trained_model.predict(dataset, verbose=0)
         if self.categorical:
             predictions = np.argmax(predictions, axis=1) #TODO: is this the best way to return categorical results? doesnt preserve confidence info
@@ -149,7 +151,7 @@ class SconeClassifier():
         else:
             model.add(layers.Dense(1, activation='sigmoid'))
         
-        opt = optimizers.Adam(learning_rate=1e-4)
+        opt = optimizers.Adam(learning_rate=1e-3)
         loss = 'sparse_categorical_crossentropy' if self.categorical else 'binary_crossentropy'
         print(metrics)
         model.compile(optimizer=opt,
