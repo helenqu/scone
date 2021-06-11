@@ -34,11 +34,17 @@ class SconeClassifier():
         self.has_ids = config.get('has_ids', False)
         self.use_test_set = True if config["mode"] == "predict" else False
         self.external_trained_model = config.get("trained_model")
+        self.abundances = None
         self.train_set = self.val_set = self.test_set = None
-
+        self.class_balanced = config.get('class_balanced', True)
+        
     def run(self):
         if not self.external_trained_model:
-            self.train_set, self.val_set, self.test_set, self.train_ids, self.val_ids, self.test_ids = self._split_and_retrieve_data()
+            if self.class_balanced:
+                self.train_set, self.val_set, self.test_set, self.train_ids, self.val_ids, self.test_ids = self._split_and_retrieve_data()
+            else:
+                self.train_set, self.val_set, self.test_set, self.train_ids, self.val_ids, self.test_ids = self._split_and_retrieve_data()
+                self.abundances = self._get_abundances()
             _, history = self.train()
             history = history.history
         else:
@@ -65,22 +71,28 @@ class SconeClassifier():
         train_set = train_set if train_set is not None else self.train_set
         val_set = val_set if val_set is not None else self.val_set
 
+        if not self.class_balanced:
+            class_weights = {k: (self.batch_size / (self.num_types * v)) for k,v in self.abundances.items()}
+        else:
+            class_weights = {k: 1/self.num_types for k,v in self.abundances.items()}
+            
         print("starting to train")
         history = model.fit(
             train_set,
             epochs=self.num_epochs,
             validation_data=val_set,
-            verbose=1)
+            verbose=1,
+            class_weight=class_weights)
 
         self.trained_model = model
         return model, history
 
     def predict(self, dataset, dataset_ids):
-        if not self.external_trained_model:
-            raise RuntimeError('model has not been trained! call `train` on the SconeClassifier instance before predict!')
-        self.trained_model = tf.keras.models.load_model(self.external_trained_model, custom_objects={"Reshape": self.Reshape})
+        if self.external_trained_model and not self.trained_model:
+            self.trained_model = models.load_model(self.external_trained_model)
 
         predictions = self.trained_model.predict(dataset, verbose=0)
+        print(predictions)
         if self.categorical:
             predictions = np.argmax(predictions, axis=1) #TODO: is this the best way to return categorical results? doesnt preserve confidence info
         predictions = predictions.flatten()
@@ -247,18 +259,34 @@ class SconeClassifier():
     def _split_and_retrieve_data(self):
         dataset = self._retrieve_data(self._load_dataset())
 
-        train_set, val_set, test_set = stratified_split(dataset, self.train_proportion, self.types, self.use_test_set)
+        train_set, val_set, test_set, abundances = stratified_split(dataset, self.train_proportion, self.types, self.use_test_set, self.class_balanced)
+
         train_set = train_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         val_set = val_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if self.use_test_set else None
 
-        if self.has_ids:
+        if self.has_ids: # and self.class_balanced:
             return extract_ids_and_batch(train_set, val_set, test_set, self.batch_size)
+        elif self.has_ids:   
+            train_set = train_set.map(lambda heatmap, label, id: (heatmap, label))
+            val_set = val_set.map(lambda heatmap, label, id: (heatmap, label))
+            train_set = train_set.batch(self.batch_size)
+            val_set = val_set.batch(self.batch_size)
+            if self.use_test_set:
+                test_set = test_set.map(lambda heatmap, label, id: (heatmap, label))
+                test_set = test_set.batch(self.batch_size)
+            return train_set, val_set, test_set
         else:
             train_set = train_set.batch(self.batch_size)
             val_set = val_set.batch(self.batch_size)
             test_set = test_set.batch(self.batch_size)
             return train_set, val_set, test_set
+        
+    def _get_abundances(self):
+        dataset = self._retrieve_data(self._load_dataset())
+
+        _, _, _, abundances = stratified_split(dataset, self.train_proportion, self.types, self.use_test_set, self.class_balanced)
+        return abundances
 
 class SconeClassifierIaModels(SconeClassifier):
     # define my own reshape layer

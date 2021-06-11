@@ -27,25 +27,44 @@ def get_images(raw_record, input_shape, categorical=False, has_ids=False):
 # requires:
 #   - dataset
 #   - train_proportion
-def stratified_split(dataset, train_proportion, types, include_test_set):
+def stratified_split(dataset, train_proportion, types, include_test_set, class_balance):
     by_type_data_lists = {sn_type: dataset.filter(lambda image, label, *_: label == sn_type) for sn_type in types}
     print(by_type_data_lists)
-    by_type_data_lengths = {k: sum([1 for _ in v]) for k,v in by_type_data_lists}
+    by_type_data_lengths = {k: sum([1 for _ in v]) for k,v in by_type_data_lists.items()}
     print(f"number of samples per label: {by_type_data_lengths}")
-    min_amount = min(by_type_data_lengths.values())
-    print(f"min number of samples: {min_amount}")
-    num_in_train = int(min_amount * train_proportion)
-    print(f"expected train set size: {num_in_train * len(by_type_data_lengths.keys())}")
-    val_proportion = 0.5*(1-train_proportion) if include_test_set else 1-train_proportion
-    num_in_val = int(min_amount * val_proportion)
-    print(f"expected val set size: {num_in_val * len(by_type_data_lengths.keys())}")
 
+    if class_balance:
+        min_amount = min(by_type_data_lengths.values())
+        print(f"min number of samples: {min_amount}")
+        num_in_train = int(min_amount * train_proportion)
+        print(f"expected train set size: {num_in_train * len(by_type_data_lengths.keys())}")
+        num_in_val = int(min_amount * val_proportion)
+        print(f"expected val set size: {num_in_val * len(by_type_data_lengths.keys())}")
+    else:
+        train_nums = []
+        val_nums = []
+        
+    val_proportion = 0.5*(1-train_proportion) if include_test_set else 1-train_proportion
+    
     train_set = None
     val_set = None
     test_set = None
     #TODO: make this no test set flow less ugly
-    for sntype, data in by_type_data_lists.items():
+
+    #temp numbers:
+    #num_in_train = 2000
+    #num_in_val = 50
+      
+    for sn_type, data in by_type_data_lists.items():
         # take from each with correct proportion to make stratified split train/val/test
+
+        if not class_balance:
+            num_in_train = round(by_type_data_lengths[sn_type] * train_proportion)
+            num_in_val = round(by_type_data_lengths[sn_type] * val_proportion)
+
+            train_nums.append(num_in_train)
+            val_nums.append(num_in_val)
+        
         data = data.shuffle(by_type_data_lengths[sn_type])
         current_train = data.take(num_in_train)
         current_test_val = data.skip(num_in_train)
@@ -63,13 +82,19 @@ def stratified_split(dataset, train_proportion, types, include_test_set):
             if include_test_set:
                 test_set = current_test
 
-    full_dataset_size = min_amount * len(by_type_data_lists.keys()) #full dataset size = heatmaps per type * num types
+    if class_balance:
+        full_dataset_size = min_amount * len(by_type_data_lists.keys()) #full dataset size = heatmaps per type * num types
+    else:
+        full_dataset_size = np.sum(np.array(train_nums)) + np.sum(np.array(val_nums))
+        print('train_nums: ' + str(train_nums))
+        print('val_nums: ' + str(val_nums))
+        
     train_set = train_set.shuffle(full_dataset_size)
     val_set = val_set.shuffle(int(full_dataset_size*val_proportion))
 
     if include_test_set:
         test_set = test_set.shuffle(int(full_dataset_size*val_proportion))
-    return train_set, val_set, test_set
+    return train_set, val_set, test_set, by_type_data_lengths
 
 # extract ids from all datasets post-caching
 # requires:
@@ -100,7 +125,6 @@ def extract_ids_from_dataset(cached_dataset):
                       dynamic_size=True)
     dataset = cached_dataset.map(lambda heatmap, label, snid: (heatmap, label))
     ids = cached_dataset.reduce(ids, lambda ids, x: ids.write(ids.size(), x[2]))
-
     return ids.stack().numpy(), dataset
 
 # get number of examples per label in dataset
@@ -112,4 +136,5 @@ def get_dataset_makeup(dataset):
         sntype = elem[1].numpy()
         relative_abundance[sntype] = 1 if sntype not in relative_abundance else relative_abundance[sntype] + 1
 
+    print(relative_abundance)
     return relative_abundance

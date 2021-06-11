@@ -21,7 +21,7 @@ SBATCH_FILE = "/global/homes/h/helenqu/scone_shellscripts/autogen_heatmaps_batch
 
 parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
 parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
-parser.add_argument('--index', type=int, help='index of single lc file you wish to create heatmaps for within your config file, i.e. 4')
+parser.add_argument('--index', type=int, help='index of single lc file you wish to create heatmaps for within your config file, i.e. 4. if no index is provided, heatmaps will be created for objects in all lc files')
 args = parser.parse_args()
 
 def load_config(config_path):

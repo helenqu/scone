@@ -52,3 +52,15 @@ if "accuracy" in history:
     print("last validation accuracy value: {}".format(history["val_accuracy"][-1]))
 if "test_accuracy" in history:
     print("test accuracy value: {}".format(history["test_accuracy"]))
+
+with open('/global/cscratch1/sd/erinhay/plasticc/outputs/training/history.json', 'w') as outfile:
+    json.dump(history, outfile)
+
+with open('/global/cscratch1/sd/erinhay/plasticc/outputs/training/preds.json', 'w') as outfile:
+    json.dump(preds_dict, outfile)
+
+#OUTPUT_PATH = config["heatmaps_path"]
+#f = open("{}/preds_dict.txt".format(OUTPUT_PATH), 'w')
+#f.write(str(preds_dict))
+#f.close()
+

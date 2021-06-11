@@ -214,11 +214,11 @@ def run(config, index):
         for i, sn_id in enumerate(lcdata_ids):
             if i % 1000 == 0:
                 print("job {}: processing {} of {}".format(index, i, len(lcdata_ids)), flush=True)
-            if i==0:
-                print('0')
-            else:
-                print(time.time()-prev)
-            prev = time.time()
+            #if i==0:
+             #   print('0')
+            #else:
+             #   print(time.time()-prev)
+            #prev = time.time()
             sn_id = int(sn_id)
             sn_metadata = metadata[metadata.object_id == sn_id]
 
