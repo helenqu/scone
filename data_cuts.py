@@ -171,13 +171,15 @@ if not FROM_JSON:
     if SAVE_TO_JSON:
         with open("{}/passed_cuts.json".format(OUTPUT_PATH), "w") as f:
             json.dump(passed_cut_by_type, f)
-    else:
-        with open("{}/passed_cuts.json".format(OUTPUT_PATH), "r") as infile:
-            passed_cut_by_type = json.load(infile)
+else:
+    with open("{}/passed_cuts.json".format(OUTPUT_PATH), "r") as infile:
+        passed_cut_by_type = json.load(infile)
 
 if IA_FRACTION == None:
+    print("Ia fraction none: no class balancing applied")
     heatmaps_final = [np.string_(id_[2:-1]) for k, v in passed_cut_by_type.items() for id_ in v]
 elif IA_FRACTION == "categorical":
+    print("Ia fraction categorical: class balancing applied")
     passed_cut_num_by_type = {k: len(v) for k, v in passed_cut_by_type.items()}
     sorted_types = [k for k, _ in sorted(passed_cut_num_by_type.items(), key=lambda item: item[1])]
 
@@ -198,6 +200,7 @@ elif IA_FRACTION == "categorical":
     print("number of each type: {}".format(least_sn_type_num))
     print("total heatmaps: {:,}, total unique heatmaps: {:,}".format(len(heatmaps_final), len(np.unique(heatmaps_final))))
 else:
+    print(f"Ia fraction {IA_FRACTION}: class balancing applied")
     Ia_heatmaps = np.unique([np.string_(v[2:-1]) for v in passed_cut_by_type.get("b'SNIa", [])])
     non_Ia_heatmaps = np.array([np.string_(snid[2:-1]) for k,v in passed_cut_by_type.items() if k != "b'SNIa" for snid in v]).flatten()
 
@@ -220,6 +223,10 @@ else:
     print("number of type Ia heatmaps: {:,}, number of non-Ia heatmaps: {:,}".format(len(Ia_heatmaps), len(non_Ia_heatmaps)))
     print("total heatmaps: {:,}, total unique heatmaps: {:,}".format(len(heatmaps_final), len(np.unique(heatmaps_final))))
 
-f = h5py.File("{}/{}_Ia_split_heatmaps_ids.hdf5".format(OUTPUT_PATH, str(IA_FRACTION).replace(".", "_")), "w")
+ids_file_path = "{}/{}_Ia_split_heatmaps_ids.hdf5".format(OUTPUT_PATH, str(IA_FRACTION).replace(".", "_"))
+f = h5py.File(ids_file_path, "w")
 f.create_dataset("names", data=heatmaps_final)
 f.close()
+
+print("data cuts completed successfully!")
+print(f"ids file written at {ids_file_path}")

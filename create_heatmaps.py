@@ -1,11 +1,23 @@
-import os, sys
+import os
 import yaml
 import argparse
-import create_heatmaps_utils
-import multiprocessing as mp
-import time
+import subprocess
 
 # TODO: give people the option to use sbatch instead of MP? but how to create system-agnostic sbatch header
+SBATCH_HEADER = """#!/bin/bash
+#SBATCH -C haswell
+#SBATCH --qos=regular
+#SBATCH -N 1
+#SBATCH --cpus-per-task=32
+#SBATCH --time=40:00:00
+
+export OMP_PROC_BIND=true
+export OMP_PLACES=threads
+export OMP_NUM_THREADS=16
+
+module load tensorflow/intel-2.2.0-py37
+python {scone_path}/create_heatmaps_job.py --config_path  {config_path} --start {start} --end {end}"""
+SBATCH_FILE = "/global/homes/h/helenqu/scone_shellscripts/autogen_heatmaps_batchfile_{index}.sh"
 
 parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
 parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
@@ -20,45 +32,29 @@ config = load_config(args.config_path)
 if "input_path" in config:
     config['metadata_paths'] = [f.path for f in os.scandir(config["input_path"]) if "HEAD.csv" in f.name]
     config['lcdata_paths'] = [path.replace("HEAD", "PHOT") for path in config['metadata_paths']]
+    with open(args.config_path, "w") as f:
+        f.write(yaml.dump(config))
 
 num_paths = len(config["lcdata_paths"])
 
-max_num_simultaneous_jobs = mp.cpu_count()
-num_simultaneous_jobs = min(15, max_num_simultaneous_jobs)
-print("max num simultaneous jobs: {}".format(max_num_simultaneous_jobs))
-print("real num simultaneous jobs: {}".format(num_simultaneous_jobs))
+num_simultaneous_jobs = 16 # haswell has 16 physical cores
+print("num simultaneous jobs: {}".format(num_simultaneous_jobs))
 print("num paths: {}".format(num_paths))
 for j in range(int(num_paths/num_simultaneous_jobs)+1):
     start = j*num_simultaneous_jobs
     end = min(num_paths, (j+1)*num_simultaneous_jobs)
 
     print("start: {}, end: {}".format(start, end))
-    procs = []
-    for i in range(start, end):
-        proc = mp.Process(target=create_heatmaps_utils.run, args=(config, i))
-        proc.start()
-        procs.append(proc)
-    for proc in procs:
-        proc.join() # wait until procs are done
-        print("procs done")
-    time.sleep(2)
-
-failed_procs = []
-for i, proc in enumerate(procs):
-    if proc.exitcode != 0:
-        failed_procs.append(i)
-
-if len(failed_procs) == 0:
-    donefile_info = "SUCCESS"
-    exit_code = 0
-else:
-    donefile_info = "CREATE HEATMAPS FAILURE\nindices of failed create heatmaps jobs: {}\ncheck out the LC data files or metadata files at those indices in the config yml at {}\nlogs located at create_heatmaps_i.log, i=failed index".format(failed_procs, args.config_path)
-    exit_code = 1
-
-donefile_path = config.get("donefile", os.path.join(config["heatmaps_path"], "done.txt"))
-if not os.path.exists(config["heatmaps_path"]):
-    os.makedirs(config["heatmaps_path"])
-with open(donefile_path, "w+") as donefile:
-    donefile.write(donefile_info)
-
-sys.exit(exit_code)
+    sbatch_setup_dict = {
+        "scone_path": os.path.dirname(__file__), # parent directory of this file
+        "config_path": args.config_path,
+        "index": j,
+        "start": start,
+        "end": end
+    }
+    sbatch_setup = SBATCH_HEADER.format(**sbatch_setup_dict)
+    sbatch_file = SBATCH_FILE.format(**{"index": j})
+    with open(sbatch_file, "w+") as f:
+        f.write(sbatch_setup)
+    print(f"launching job {j} from {start} to {end}")
+    subprocess.run(["sbatch", sbatch_file])

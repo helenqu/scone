@@ -8,6 +8,14 @@ import h5py
 from data_utils import *
 
 class SconeClassifier():
+    # define my own reshape layer
+    class Reshape(layers.Layer):
+        def call(self, inputs):
+            return tf.transpose(inputs, perm=[0,3,2,1])
+
+        def get_config(self): # for model saving/loading
+            return {}
+
     def __init__(self, config):
         self.heatmaps_path = config['heatmaps_path']
         self.batch_size = config.get('batch_size', 32)
@@ -34,7 +42,7 @@ class SconeClassifier():
             _, history = self.train()
             history = history.history
         else:
-            self.trained_model = models.load_model(self.external_trained_model)
+            self.trained_model = models.load_model(self.external_trained_model, custom_objects={"Reshape": self.Reshape})
             history = {}
         dataset, dataset_ids = self.get_test_set() if self.use_test_set else self.get_train_set()
         preds_dict = self.predict(dataset, dataset_ids)
@@ -70,7 +78,7 @@ class SconeClassifier():
     def predict(self, dataset, dataset_ids):
         if not self.external_trained_model:
             raise RuntimeError('model has not been trained! call `train` on the SconeClassifier instance before predict!')
-        self.trained_model = models.load_model(self.external_trained_model)
+        self.trained_model = tf.keras.models.load_model(self.external_trained_model, custom_objects={"Reshape": self.Reshape})
 
         predictions = self.trained_model.predict(dataset, verbose=0)
         if self.categorical:
@@ -115,6 +123,60 @@ class SconeClassifier():
     #   - CATEGORICAL
     #   - NUM_TYPES
     def _define_and_compile_model(self, metrics=['accuracy']):
+
+        y, x, _ = self.input_shape
+        
+        model = models.Sequential()
+
+        model.add(layers.ZeroPadding2D(padding=(0,1), input_shape=self.input_shape))
+        model.add(layers.Conv2D(y, (y, 3), activation='elu'))
+        model.add(self.Reshape())
+        model.add(layers.BatchNormalization())
+        model.add(layers.ZeroPadding2D(padding=(0,1)))
+        model.add(layers.Conv2D(y, (y, 3), activation='elu'))
+        model.add(self.Reshape())
+        model.add(layers.BatchNormalization())
+
+        model.add(layers.MaxPooling2D((2, 2)))
+        
+        model.add(layers.ZeroPadding2D(padding=(0,1)))
+        model.add(layers.Conv2D(int(y/2), (int(y/2), 3), activation='elu'))
+        model.add(self.Reshape())
+        model.add(layers.BatchNormalization())
+        model.add(layers.ZeroPadding2D(padding=(0,1)))
+        model.add(layers.Conv2D(int(y/2), (int(y/2), 3), activation='elu'))
+        model.add(self.Reshape())
+        model.add(layers.BatchNormalization())
+
+        model.add(layers.MaxPooling2D((2, 2)))
+
+        model.add(layers.Flatten())
+        model.add(layers.Dropout(0.5))
+        model.add(layers.Dense(32, activation='relu'))
+        model.add(layers.Dropout(0.3))
+
+        if self.categorical:
+            model.add(layers.Dense(self.num_types, activation='softmax'))
+        else:
+            model.add(layers.Dense(1, activation='sigmoid'))
+        
+        opt = optimizers.Adam(learning_rate=1e-4)
+        loss = 'sparse_categorical_crossentropy' if self.categorical else 'binary_crossentropy'
+        print(metrics)
+        model.compile(optimizer=opt,
+                      loss=loss,
+                      metrics=metrics)
+
+        return model
+
+
+    # defines and compiles, then returns model
+    # requires:
+    #   - INPUT_SHAPE
+    #   - CATEGORICAL
+    #   - NUM_TYPES
+    def _define_and_compile_model_old(self, metrics=['accuracy']):
+
         y, x, _ = self.input_shape
         
         model = models.Sequential()
@@ -161,8 +223,11 @@ class SconeClassifier():
         return model
 
     def _load_dataset(self):
+        filenames = ["{}/{}".format(self.heatmaps_path, f.name) for f in os.scandir(self.heatmaps_path) if "tfrecord" in f.name]
+        np.random.shuffle(filenames)
+        print(len(filenames))
         raw_dataset = tf.data.TFRecordDataset(
-            ["{}/{}".format(self.heatmaps_path, f.name) for f in os.scandir(self.heatmaps_path) if "tfrecord" in f.name], 
+            filenames,
             num_parallel_reads=80)
 
         return raw_dataset
@@ -196,6 +261,14 @@ class SconeClassifier():
             return train_set, val_set, test_set
 
 class SconeClassifierIaModels(SconeClassifier):
+    # define my own reshape layer
+    class Reshape(layers.Layer):
+        def call(self, inputs):
+            return tf.transpose(inputs, perm=[0,3,2,1])
+
+        def get_config(self): # for model saving/loading
+            return {}
+
     def __init__(self, config):
         super().__init__(config)
         self.external_test_sets = config.get('external_test_sets', None)
@@ -261,4 +334,4 @@ class SconeClassifierIaModels(SconeClassifier):
 
         Ia_dataset = Ia_dataset.shuffle(100_000)
         non_Ia_dataset = non_Ia_dataset.shuffle(100_000)
-
+        return Ia_dataset, non_Ia_dataset
