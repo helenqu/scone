@@ -29,7 +29,6 @@ def get_images(raw_record, input_shape, categorical=False, has_ids=False):
 #   - train_proportion
 def stratified_split(dataset, train_proportion, types, include_test_set, class_balance):
     by_type_data_lists = {sn_type: dataset.filter(lambda image, label, *_: label == sn_type) for sn_type in types}
-    print(by_type_data_lists)
     by_type_data_lengths = {k: sum([1 for _ in v]) for k,v in by_type_data_lists.items()}
     print(f"number of samples per label: {by_type_data_lengths}")
 
@@ -41,8 +40,8 @@ def stratified_split(dataset, train_proportion, types, include_test_set, class_b
         num_in_val = int(min_amount * val_proportion)
         print(f"expected val set size: {num_in_val * len(by_type_data_lengths.keys())}")
     else:
-        train_nums = []
-        val_nums = []
+        train_nums = {}
+        val_nums = {}
         
     val_proportion = 0.5*(1-train_proportion) if include_test_set else 1-train_proportion
     
@@ -50,10 +49,6 @@ def stratified_split(dataset, train_proportion, types, include_test_set, class_b
     val_set = None
     test_set = None
     #TODO: make this no test set flow less ugly
-
-    #temp numbers:
-    #num_in_train = 2000
-    #num_in_val = 50
       
     for sn_type, data in by_type_data_lists.items():
         # take from each with correct proportion to make stratified split train/val/test
@@ -62,8 +57,8 @@ def stratified_split(dataset, train_proportion, types, include_test_set, class_b
             num_in_train = round(by_type_data_lengths[sn_type] * train_proportion)
             num_in_val = round(by_type_data_lengths[sn_type] * val_proportion)
 
-            train_nums.append(num_in_train)
-            val_nums.append(num_in_val)
+            train_nums[sn_type] = num_in_train
+            val_nums[sn_type] = num_in_val
         
         data = data.shuffle(by_type_data_lengths[sn_type])
         current_train = data.take(num_in_train)
@@ -85,9 +80,9 @@ def stratified_split(dataset, train_proportion, types, include_test_set, class_b
     if class_balance:
         full_dataset_size = min_amount * len(by_type_data_lists.keys()) #full dataset size = heatmaps per type * num types
     else:
-        full_dataset_size = np.sum(np.array(train_nums)) + np.sum(np.array(val_nums))
-        print('train_nums: ' + str(train_nums))
-        print('val_nums: ' + str(val_nums))
+        full_dataset_size = np.sum(train_nums.values()) + np.sum(val_nums.values())
+        print(f"train_nums: {train_nums}")
+        print(f"val_nums: {val_nums}")
         
     train_set = train_set.shuffle(full_dataset_size)
     val_set = val_set.shuffle(int(full_dataset_size*val_proportion))
