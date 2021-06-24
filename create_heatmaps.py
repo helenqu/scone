@@ -17,7 +17,7 @@ export OMP_NUM_THREADS=16
 
 module load tensorflow/intel-2.2.0-py37
 python {scone_path}/create_heatmaps_job.py --config_path  {config_path} --start {start} --end {end}"""
-SBATCH_FILE = "/global/cscratch1/sd/erinhay/plasticc/shell/autogen_heatmaps_batchfile_{index}.sh"
+SBATCH_FILE = "/global/homes/h/helenqu/scone_shellscripts/autogen_heatmaps_batchfile_{index}.sh"
 
 parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
 parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
