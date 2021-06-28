@@ -52,3 +52,10 @@ if "accuracy" in history:
     print("last validation accuracy value: {}".format(history["val_accuracy"][-1]))
 if "test_accuracy" in history:
     print("test accuracy value: {}".format(history["test_accuracy"]))
+
+with open(config['heatmaps_path'] + '/history.json', 'w') as outfile:
+    json.dump(history, outfile)
+
+with open(config['heatmaps_path'] + '/preds.json', 'w') as outfile:
+    json.dump(preds_dict, outfile)
+
