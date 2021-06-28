@@ -18,7 +18,12 @@ class SconeClassifier():
 
     def __init__(self, config):
         self.heatmaps_path = config['heatmaps_path']
-        self.batch_size = config.get('batch_size', 32)
+        
+        self.strategy = tf.distribute.MirroredStrategy()
+        self.batch_size_per_replica = config.get('batch_size', 32)
+        self.batch_size = self.batch_size_per_replica * self.strategy.num_replicas_in_sync
+        print(f"batch size in config: {self.batch_size_per_replica}, num replicas: {self.strategy.num_replicas_in_sync}, true batch size: {self.batch_size}")
+
         self.num_epochs = config['num_epochs']
         self.input_shape = (config['num_wavelength_bins'], config['num_mjd_bins'], 2)
         self.categorical = config['categorical']
@@ -62,10 +67,11 @@ class SconeClassifier():
     #   - NUM_EPOCHS
     #   - batch_size
     def train(self, train_set=None, val_set=None):
-        model = self._define_and_compile_model()
-        print(model.summary())
-        train_set = train_set if train_set is not None else self.train_set
-        val_set = val_set if val_set is not None else self.val_set
+        with self.strategy.scope():
+            model = self._define_and_compile_model()
+            print(model.summary())
+            train_set = train_set if train_set is not None else self.train_set
+            val_set = val_set if val_set is not None else self.val_set
 
         if not self.class_balanced:
             class_weights = {k: (self.batch_size / (self.num_types * v)) for k,v in self.abundances.items()}
@@ -132,7 +138,6 @@ class SconeClassifier():
     #   - CATEGORICAL
     #   - NUM_TYPES
     def _define_and_compile_model(self, metrics=['accuracy']):
-
         y, x, _ = self.input_shape
         
         model = models.Sequential()
@@ -242,7 +247,7 @@ class SconeClassifier():
         return raw_dataset
 
     def _retrieve_data(self, raw_dataset):
-        dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical, self.has_ids), num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical, self.has_ids), num_parallel_calls=40)
         self.types = [0,1] if not self.categorical else np.unique([data[1] for data in dataset])
 
         return dataset.apply(tf.data.experimental.ignore_errors())

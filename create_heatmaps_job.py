@@ -1,7 +1,7 @@
 import os, sys
 import yaml
 import argparse
-import create_heatmaps_utils
+from create_heatmaps_utils import CreateHeatmapsManager
 import subprocess
 import multiprocessing as mp
 
@@ -16,11 +16,14 @@ def load_config(config_path):
         config = yaml.load(cfgfile)
     return config
 
+def create_heatmaps(config, index):
+    CreateHeatmapsManager(config, index).run()
+
 config = load_config(args.config_path)
 
 procs = []
 for i in range(args.start, args.end):
-    proc = mp.Process(target=create_heatmaps_utils.run, args=(config, i))
+    proc = mp.Process(target=create_heatmaps, args=(config, i))
     proc.start()
     procs.append(proc)
 for proc in procs:

@@ -9,7 +9,8 @@ SBATCH_HEADER = """#!/bin/bash
 #SBATCH --qos=regular
 #SBATCH -N 1
 #SBATCH --cpus-per-task=32
-#SBATCH --time=40:00:00
+#SBATCH --time=20:00:00
+#SBATCH --output={log_path}
 
 export OMP_PROC_BIND=true
 export OMP_PLACES=threads
@@ -17,7 +18,12 @@ export OMP_NUM_THREADS=16
 
 module load tensorflow/intel-2.2.0-py37
 python {scone_path}/create_heatmaps_job.py --config_path  {config_path} --start {start} --end {end}"""
-SBATCH_FILE = "/global/homes/h/helenqu/scone_shellscripts/autogen_heatmaps_batchfile_{index}.sh"
+
+LOG_OUTPUT_PATH = os.path.join(os.path.expanduser('~'), "scone_shellscripts")
+SBATCH_FILE = os.path.join(LOG_OUTPUT_PATH, "autogen_heatmaps_batchfile_{index}.sh")
+
+if not os.path.exists(LOG_OUTPUT_PATH):
+    os.makedirs(LOG_OUTPUT_PATH)
 
 parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
 parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
@@ -46,8 +52,9 @@ for j in range(int(num_paths/num_simultaneous_jobs)+1):
 
     print("start: {}, end: {}".format(start, end))
     sbatch_setup_dict = {
-        "scone_path": os.path.dirname(__file__), # parent directory of this file
+        "scone_path": os.path.dirname(os.path.abspath(__file__)), # parent directory of this file
         "config_path": args.config_path,
+        "log_path": os.path.join(LOG_OUTPUT_PATH, f"CREATE_HEATMAPS__{os.path.basename(args.config_path)}.log"),
         "index": j,
         "start": start,
         "end": end
