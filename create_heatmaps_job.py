@@ -1,9 +1,9 @@
 import os, sys
 import yaml
 import argparse
-from create_heatmaps_utils import CreateHeatmapsManager
 import subprocess
 import multiprocessing as mp
+from create_heatmaps.utils import CreateHeatmapsManager
 
 parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
 parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
@@ -17,7 +17,7 @@ def load_config(config_path):
     return config
 
 def create_heatmaps(config, index):
-    CreateHeatmapsManager(config, index).run()
+    CreateHeatmapsManager().run(config, index)
 
 config = load_config(args.config_path)
 
