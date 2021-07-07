@@ -131,11 +131,13 @@ def apply_cuts(metadata, lcdata, thresholds):
     print("sn ids with no detections: {}".format({k:len(v) for k,v in no_detections.items()}))
     return np.array(passed_cuts)
 
+print("RUNNING", flush=True)
 if not FROM_JSON:
     passed_cut_by_type = {}
     passed_cut_ids_with_type = np.array([])
+    print(len(METADATA_PATHS))
     for i, (metadata_path, lcdata_path) in enumerate(zip(METADATA_PATHS, LCDATA_PATHS)):
-        print("processing file {}".format(i))
+        print("processing file {}".format(i), flush=True)
 
         metadata = pd.read_csv(metadata_path, compression="gzip") if os.path.splitext(metadata_path)[1] == ".gz" else pd.read_csv(metadata_path)
         lcdata = pd.read_csv(lcdata_path, compression="gzip") if os.path.splitext(lcdata_path)[1] == ".gz" else pd.read_csv(lcdata_path)

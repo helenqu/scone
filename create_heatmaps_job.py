@@ -3,7 +3,7 @@ import yaml
 import argparse
 import subprocess
 import multiprocessing as mp
-from create_heatmaps.utils import CreateHeatmapsManager
+from create_heatmaps.manager import CreateHeatmapsManager
 
 parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
 parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')

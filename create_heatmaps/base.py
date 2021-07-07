@@ -187,7 +187,7 @@ class CreateHeatmapsBase(abc.ABC):
         self.done_by_type[sn_name] = 1 if sn_name not in self.done_by_type else self.done_by_type[sn_name] + 1
 
     def _get_predictions_heatmap(self, gp, mjd_range, milkyway_ebv):
-        times = np.linspace(mjd_range[0], mjd_range[1], self.mjd_bins) if self.early_lightcurves_mixed or not self.early_lightcurves else np.arange(mjd_range[0], mjd_range[1], 1)  #TODO: maybe get rid of the else; probably want to make them all the same size anyway
+        times = np.linspace(mjd_range[0], mjd_range[1], self.mjd_bins)
 
         wavelengths = np.linspace(3000.0, 10100.0, self.wavelength_bins)
         ext = get_extinction(milkyway_ebv, wavelengths)
