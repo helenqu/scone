@@ -51,7 +51,7 @@ def build_gp(guess_length_scale, sn_data, bands):
 
     return gaussian_process
 
-def image_example(image_string, label, id):
+def image_example(image_string, label, id, z, z_err):
     def _bytes_feature(value):
         """Returns a bytes_list from a string / byte."""
         if isinstance(value, type(tf.constant(0))):
@@ -62,9 +62,15 @@ def image_example(image_string, label, id):
         """Returns an int64_list from a bool / enum / int / uint."""
         return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
 
+    def _float_feature(value):
+      """Returns a float_list from a float / double."""
+      return tf.train.Feature(float_list=tf.train.FloatList(value=[value]))
+
     feature = {
         'id': _int64_feature(id),
         'label': _int64_feature(label),
+        'z': _float_feature(z),
+	'z_err': _float_feature(z_err),
         'image_raw': _bytes_feature(image_string),
     }
 

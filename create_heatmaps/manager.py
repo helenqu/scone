@@ -1,4 +1,4 @@
-from create_heatmaps.heatmaps_types import CreateHeatmapsFull, CreateHeatmapsEarlyMixed, CreateHeatmapsEarly
+from create_heatmaps.heatmaps_types import CreateHeatmapsFull, CreateHeatmapsEarlyMixed, CreateHeatmapsEarly, MagById, SaveFirstDetectionToCSV
 
 class CreateHeatmapsManager():
     def run(self, config, index):

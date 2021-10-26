@@ -39,8 +39,14 @@ sn_type_id_to_name:
   90: "SNIa"
   95: "SLSN-1"
 
-categorical: False
+### MODEL ARCHITECTURE / TRAINING PARAMS ###
+mode: "train" # or "predict", but have to specify path to trained model
+trained_model: "/path/to/trained/model" # only needs to be specified in predict mode
+class_balanced: True
+categorical: False # categorical vs. binary classification
 batch_size: 32
 num_epochs: 400
 train_proportion: 0.8
 val_proportion: 0.1
+has_ids: True
+with_z: False # classification with/without redshift

@@ -1,5 +1,8 @@
 import numpy as np
+import os
 from create_heatmaps.base import CreateHeatmapsBase
+import json
+import pandas as pd
 
 class CreateHeatmapsFull(CreateHeatmapsBase):
     def run(self):
@@ -28,7 +31,6 @@ class CreateHeatmapsEarlyBase(CreateHeatmapsBase):
     def _calculate_trigger(sn_metadata, sn_data):
         sn_data.sort("mjd")
         snrs_by_mjd = [[mjd, flux/flux_err] for mjd, flux, flux_err in sn_data.iterrows('mjd', 'flux', 'flux_err')]
-        # snrs_by_mjd = {sn_data.iloc[idx]['mjd']:sn_data.iloc[idx]['flux']/sn_data.iloc[idx]['flux_err'] for idx in range(len(sn_data))}
         detections = [[mjd,snr] for mjd, snr in snrs_by_mjd if snr > 5]
         if len(detections) < 2:
             return 
@@ -43,20 +45,21 @@ class CreateHeatmapsEarlyBase(CreateHeatmapsBase):
 
 class CreateHeatmapsEarlyMixed(CreateHeatmapsEarlyBase):
     def run(self):
-        self.create_heatmaps([self.output_path], [[-20, [5,15,25,50]]], fit_on_full_lc=False)
+        print("running early mixed")
+        self.create_heatmaps([self.output_path], [[-20, np.arange(0,51)]], fit_on_full_lc=False)
     
     @staticmethod
     def _calculate_mjd_range(sn_metadata, sn_data, mjd_minmax, has_peakmjd):
         mjd_min, mjd_max = mjd_minmax
-        trigger = self._calculate_trigger(sn_metadata, sn_data)
+        trigger = CreateHeatmapsEarlyMixed._calculate_trigger(sn_metadata, sn_data)
         if not trigger:
             return
         mjd_max = np.random.choice(mjd_max)
-        return [trigger_mjd+mjd_min, trigger_mjd+mjd_max]
+        return [trigger+mjd_min, trigger+mjd_max],mjd_max #TODO: change backto one return val 7/16
 
 class CreateHeatmapsEarly(CreateHeatmapsEarlyBase):
     def run(self):
-        days_after_trigger = [5,15,25,50]
+        days_after_trigger = [5]
         days_before_trigger = -20
         output_paths = [f"{self.output_path}/{days_before_trigger}x{i}_trigger_32x180" for i in days_after_trigger]
         mjd_ranges = [[days_before_trigger, i] for i in days_after_trigger]
@@ -66,12 +69,82 @@ class CreateHeatmapsEarly(CreateHeatmapsEarlyBase):
     @staticmethod
     def _calculate_mjd_range(sn_metadata, sn_data, mjd_minmax, has_peakmjd):
         mjd_min, mjd_max = mjd_minmax
-        trigger = self._calculate_trigger(sn_metadata, sn_data)
+        trigger = CreateHeatmapsEarly._calculate_trigger(sn_metadata, sn_data)
         if not trigger:
             return
-        return [trigger-mjd_min, trigger+mjd_max]
+        return [trigger+mjd_min, trigger+mjd_max]
 
-class LastSNRById(CreateHeatmapsBase):
+class SaveTriggerToCSV(CreateHeatmapsEarlyBase):
+    def run(self):
+        OUTPUT_PATH = os.path.dirname(self.metadata_path)
+        print("writing to {}".format(OUTPUT_PATH))
+        self.metadata["1season_peakmjd"] = np.zeros(len(self.metadata))
+        self.metadata["3season_peakmjd"] = np.zeros(len(self.metadata))
+
+        for i, sn_id in enumerate(self.lcdata_ids):
+            if i % 1000 == 0:
+                print(f"processing {i} of {len(self.lcdata_ids)}")
+            sn_metadata = self.metadata[self.metadata.object_id == sn_id]
+            sn_name = self.sn_type_id_map[sn_metadata.true_target.iloc[0]]
+            sn_lcdata = self.lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
+
+            sn_mjd = sorted(sn_lcdata['mjd'], reverse=True)
+            trigger = sn_metadata.trigger_mjd.values[0]
+            if np.isnan(trigger):
+                continue
+            sn_mjd_trigger_idx = np.where([round(mjd, 3) for mjd in sn_mjd] == round(trigger, 3))[0]
+            if len(sn_mjd_trigger_idx) == 0:
+                print(trigger)
+                print([round(mjd, 3) for mjd in sn_mjd])
+                break
+            sn_mjd_trigger_idx = sn_mjd_trigger_idx[0]
+
+            season_start_idx = -1
+            for i in range(sn_mjd_trigger_idx, len(sn_mjd)-1):
+                if i == 0:
+                    print(sn_mjd[i] - sn_mjd[i+1])
+                if sn_mjd[i] - sn_mjd[i+1] > 50:
+                    season_start_idx = i
+                    break
+            season_start = sn_mjd[season_start_idx]
+
+            sn_mjd = sorted(sn_lcdata['mjd'])
+            sn_mjd_trigger_idx = np.where([round(mjd, 3) for mjd in sn_mjd] == round(trigger, 3))[0][0]
+            season_end_idx = -1
+            for i in range(sn_mjd_trigger_idx, len(sn_mjd)-1):
+                if sn_mjd[i] - sn_mjd[i+1] < -100:
+                    season_end_idx = i
+                    break
+            season_end = sn_mjd[season_end_idx]
+
+            sn_data = sn_lcdata[np.logical_and(sn_lcdata["mjd"] >= season_start, sn_lcdata["mjd"] <= season_end)]
+            mjd = np.array(sn_data['mjd'])
+            flux = np.array(sn_data['flux'])
+            flux_err = np.array(sn_data['flux_err'])
+            snrs = flux**2 / flux_err**2
+            mask = snrs > 5
+            mjd = mjd[mask]
+            snrs = snrs[mask]
+            peak_mjd_oneseason = np.sum(mjd * snrs) / np.sum(snrs)
+            self.metadata.loc[self.metadata.object_id == sn_id, "1season_peakmjd"] = peak_mjd_oneseason
+
+            mjd = np.array(sn_lcdata['mjd'])
+            flux = np.array(sn_lcdata['flux'])
+            flux_err = np.array(sn_lcdata['flux_err'])
+            snrs = flux**2 / flux_err**2
+            mask = snrs > 5
+            mjd = mjd[mask]
+            snrs = snrs[mask]
+            if len(mjd) == 0 or len(snrs) == 0:
+                print(snid)
+            peak_mjd_calculated = np.sum(mjd * snrs) / np.sum(snrs)
+            self.metadata.loc[self.metadata.object_id == sn_id, "3season_peakmjd"] = peak_mjd_calculated
+        self.metadata.to_csv(os.path.join(OUTPUT_PATH, os.path.basename(self.metadata_path)), index=False)
+
+class MagById(CreateHeatmapsBase):
+    @staticmethod
+    def _calculate_mjd_range(sn_metadata, sn_data, mjd_minmax, has_peakmjd):
+        raise NotImplementedError
     def run(self):
         def _calculate_detections(sn_data):
             sn_data.sort("mjd")
@@ -95,27 +168,16 @@ class LastSNRById(CreateHeatmapsBase):
             trigger_mjd = detections_mjd[0]
 
             return trigger_mjd
-        last_snr_by_id = {5: {}, 15: {}, 25: {}, 50: {}}
-        # num_detection_points_by_type = {5: {}, 15: {}, 25: {}, 50: {}}
-        metadata_path = self.config['metadata_paths'][self.index]
-        lcdata_path = self.config['lcdata_paths'][self.index]
 
-        metadata = pd.read_csv(metadata_path, compression="gzip") if os.path.splitext(metadata_path)[1] == ".gz" else pd.read_csv(metadata_path)
-        metadata_ids = metadata[metadata.true_target.isin(self.config["sn_type_id_to_name"].keys())].object_id
-
-        lcdata = pd.read_csv(lcdata_path, compression="gzip") if os.path.splitext(lcdata_path)[1] == ".gz" else pd.read_csv(lcdata_path)
-        lcdata = Table.from_pandas(lcdata)
-        lcdata.add_index('object_id')
-        lcdata_ids = np.intersect1d(lcdata['object_id'], metadata_ids)
-
-        for i, sn_id in enumerate(lcdata_ids):
+        mag_by_id = {0: [], 5: [], 15: []}
+        for i, sn_id in enumerate(self.lcdata_ids):
             if i % 1000 == 0:
-                print(f"processing {i} of {len(lcdata_ids)}")
-            sn_metadata = metadata[metadata.object_id == sn_id]
-            sn_name = self.config["sn_type_id_to_name"][sn_metadata.true_target.iloc[0]]
-            sn_lcdata = lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
+                print(f"processing {i} of {len(self.lcdata_ids)}")
+            sn_metadata = self.metadata[self.metadata.object_id == sn_id]
+            sn_name = self.sn_type_id_map[sn_metadata.true_target.iloc[0]]
+            sn_lcdata = self.lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
 
-            for mjdmax in [5,15,25,50]:
+            for mjdmax in mag_by_id.keys():
                 trigger_mjd = _calculate_trigger(sn_lcdata)
                 detections = _calculate_detections(sn_lcdata)
                 if not detections or not trigger_mjd:
@@ -127,14 +189,47 @@ class LastSNRById(CreateHeatmapsBase):
                 if not mask.any(): # if all false
                     print("empty sn data after mjd mask", mjd_range, np.min(mjds), np.max(mjds))
                     continue
-                # sn_lcdata_included = sn_lcdata[mask]
+                sn_lcdata_included = sn_lcdata[mask]
+                sn_lcdata_r = sn_lcdata_included[sn_lcdata_included['passband'] == 1]
+                if len(sn_lcdata_r) == 0:
+                    continue
+                last_r_flux = sn_lcdata_r['flux'][-1]
+                last_r_mag = 27.5 - 2.5*np.log10(last_r_flux)
+                if last_r_mag <= 20:
+                    mag_by_id[int(mjdmax)].append(int(sn_id))
 
-                detections_mjd, detections_snr = detections
-                mask = np.logical_and(detections_mjd >= mjd_range[0], detections_mjd <= mjd_range[1])
-                detections_included = np.array(detections_snr)[mask]
-                last_snr = detections_included[-1]
+        with open(os.path.join(self.output_path, f"mag_over_20_ids_{self.index}.json"), "w+") as outfile:
+            json.dump(mag_by_id, outfile)
 
-                last_snr_by_id[mjdmax][int(sn_id)] = last_snr
+class SaveFirstDetectionToCSV(CreateHeatmapsEarlyBase):
+    @staticmethod
+    def _calculate_first_detection(sn_metadata, sn_data):
+        sn_data.sort("mjd")
+        snrs_by_mjd = [[mjd, flux/flux_err] for mjd, flux, flux_err in sn_data.iterrows('mjd', 'flux', 'flux_err')]
+        detections = [[mjd,snr] for mjd, snr in snrs_by_mjd if snr > 5]
+        if len(detections) < 2:
+            return 
+        first_detection_mjd = detections[0][0]
 
-            with open(self.config["heatmaps_path"] + f"/last_snr_by_id_{self.index}.json", "w+") as outfile:
-                outfile.write(json.dumps(last_snr_by_id))
+        return first_detection_mjd
+
+    def run(self):
+        OUTPUT_PATH = os.path.dirname(self.metadata_path)
+        print("writing to {}".format(OUTPUT_PATH))
+
+        data = []
+        for i, sn_id in enumerate(self.lcdata_ids):
+            if i % 1000 == 0:
+                print(f"processing {i} of {len(self.lcdata_ids)}")
+            sn_metadata = self.metadata[self.metadata.object_id == sn_id]
+            sn_name = self.sn_type_id_map[sn_metadata.true_target.iloc[0]]
+            sn_lcdata = self.lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
+
+            sn_mjd = sorted(sn_lcdata['mjd'], reverse=True)
+            trigger = sn_metadata.trigger_mjd.values[0]
+            first_detection = SaveFirstDetectionToCSV._calculate_first_detection(sn_metadata, sn_lcdata)
+            if np.isnan(trigger) or np.isnan(first_detection):
+                continue
+            data.append([sn_id, first_detection, trigger])
+
+        pd.DataFrame(data, columns=["snid", "first_detection_mjd", "trigger_mjd"]).to_csv(os.path.join(OUTPUT_PATH, os.path.basename(self.metadata_path)), index=False)

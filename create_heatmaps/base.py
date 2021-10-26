@@ -54,7 +54,7 @@ class CreateHeatmapsBase(abc.ABC):
         self.lcdata_ids = np.intersect1d(self.lcdata['object_id'], metadata_ids)
         
         if self.ids_path:
-            ids_file = h5py.File(IDS_PATH, "r")
+            ids_file = h5py.File(self.ids_path, "r")
             self.ids = [x.decode('utf-8') for x in ids_file["names"]]
             ids_file.close()
             print("job {}: found ids, expect {} total heatmaps".format(self.index, len(self.ids)), flush=True)
@@ -81,10 +81,12 @@ class CreateHeatmapsBase(abc.ABC):
             self.removed_by_type = {}
             self.done_ids = []
 
+            timings = []
             with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(output_path, self.index)) as writer:
                 for i, sn_id in enumerate(self.lcdata_ids):
                     if i % 1000 == 0:
                         print("job {}: processing {} of {}".format(self.index, i, len(self.lcdata_ids)), flush=True)
+                    start = time.time()
                     
                     sn_data = self._get_sn_data(sn_id)
                     if not sn_data:
@@ -144,8 +146,14 @@ class CreateHeatmapsBase(abc.ABC):
                             break
                         self.type_to_int_label[sn_name] = 1 if sn_name == "SNIa" or sn_name == "Ia" else 0
 
-                    writer.write(image_example(heatmap.flatten().tobytes(), self.type_to_int_label[sn_name], sn_id))
+                    z = sn_metadata['true_z'].iloc[0]
+                    z_err = sn_metadata['true_z_err'].iloc[0]
+                    writer.write(image_example(heatmap.flatten().tobytes(), self.type_to_int_label[sn_name], sn_id, z, z_err))
+                    timings.append(time.time() - start)
+
                     self._done(sn_name, sn_id)
+
+            pd.DataFrame({"timings": timings}).to_csv(os.path.join(output_path, "timings.csv"), index=False)
 
             if not os.path.exists(self.finished_filenames_path):
                 pd.DataFrame({"filenames": [os.path.basename(self.metadata_path)]}).to_csv(self.finished_filenames_path, index=False)
@@ -167,13 +175,13 @@ class CreateHeatmapsBase(abc.ABC):
     def _get_sn_data(self, sn_id):
         sn_metadata = self.metadata[self.metadata.object_id == sn_id]
         if sn_metadata.empty:
-            return None, None
+            return None
 
         sn_name = self.sn_type_id_map[sn_metadata.true_target.iloc[0]]
         not_in_ids = self.ids and "{}_{}".format(sn_name, sn_id) not in self.ids
         already_done = sn_id in self.done_ids
         if not_in_ids or already_done:
-            return None, None
+            return None
 
         sn_lcdata = self.lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
         
@@ -192,10 +200,10 @@ class CreateHeatmapsBase(abc.ABC):
         wavelengths = np.linspace(3000.0, 10100.0, self.wavelength_bins)
         ext = get_extinction(milkyway_ebv, wavelengths)
         ext = np.tile(np.expand_dims(ext, axis=1), len(times))
-
         time_wavelength_grid = np.transpose([np.tile(times, len(wavelengths)), np.repeat(wavelengths, len(times))])
+ 
         predictions, prediction_vars = gp(time_wavelength_grid, return_var=True)
-        ext_corrected_predictions = np.array(predictions).reshape(len(wavelengths), len(times)) + ext
-        prediction_uncertainties = np.sqrt(prediction_vars).reshape(len(wavelengths), len(times))
+        ext_corrected_predictions = np.array(predictions).reshape(32, 180) + ext
+        prediction_uncertainties = np.sqrt(prediction_vars).reshape(32, 180)
 
         return ext_corrected_predictions, prediction_uncertainties

@@ -7,28 +7,37 @@ import tensorflow as tf
 #   - raw_record
 #   - INPUT_SHAPE
 #   - CATEGORICAL
-def get_images(raw_record, input_shape, categorical=False, has_ids=False):
+def get_images(raw_record, input_shape, has_ids=False, with_z=False):
     image_feature_description = {
         'label': tf.io.FixedLenFeature([], tf.int64),
         'image_raw': tf.io.FixedLenFeature([], tf.string),
     }
     if has_ids: 
         image_feature_description['id'] = tf.io.FixedLenFeature([], tf.int64)
+    if with_z: 
+        image_feature_description['z'] = tf.io.FixedLenFeature([], tf.float32)
+        image_feature_description['z_err'] = tf.io.FixedLenFeature([], tf.float32)
+
 
     example = tf.io.parse_single_example(raw_record, image_feature_description)
     image = tf.reshape(tf.io.decode_raw(example['image_raw'], tf.float64), input_shape)
     image = image / tf.reduce_max(image[:,:,0])
 
+    # TODO: have to subtract 1 from label to get rid of KN in early classification
+    if with_z:
+        output = [{"image": image, "z": example["z"], "z_err": example["z_err"]}, {"label": example['label']-1}]
+    else:
+        output = [{"image": image}, {"label": example['label']}]
     if has_ids:
-        return image, example['label'], tf.cast(example['id'], tf.int32)
-    return image, example['label']
+        return output.append(tf.cast(example['id'], tf.int32))
+    return output
 
 # balances classes, splits dataset into train/validation/test sets
 # requires:
 #   - dataset
 #   - train_proportion
 def stratified_split(dataset, train_proportion, types, include_test_set, class_balance):
-    by_type_data_lists = {sn_type: dataset.filter(lambda image, label, *_: label == sn_type) for sn_type in types}
+    by_type_data_lists = {sn_type: dataset.filter(lambda image, label, *_: label["label"] == sn_type) for sn_type in types}
     by_type_data_lengths = {k: sum([1 for _ in v]) for k,v in by_type_data_lists.items()}
     print(f"number of samples per label: {by_type_data_lengths}")
 

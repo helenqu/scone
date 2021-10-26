@@ -37,6 +37,7 @@ class SconeClassifier():
             # self.num_types = len(np.unique(types))
         self.train_proportion = config.get('train_proportion', 0.8)
         self.has_ids = config.get('has_ids', False)
+        self.with_z = config.get('with_z', False)
         self.use_test_set = True if config["mode"] == "predict" else False
         self.external_trained_model = config.get("trained_model")
         self.abundances = None
@@ -139,41 +140,48 @@ class SconeClassifier():
     #   - NUM_TYPES
     def _define_and_compile_model(self, metrics=['accuracy']):
         y, x, _ = self.input_shape
+
+        image_input = tf.keras.Input(shape=self.input_shape, name="image")
+        # z_input, z_err_input will only be used when doing classification with redshift
+        z_input = tf.keras.Input(shape=(1,), name="z")
+        z_err_input = tf.keras.Input(shape=(1,), name="z_err")
+        inputs = [image_input] if not self.with_z else [image_input, z_input, z_err_input]
         
-        model = models.Sequential()
+        x = layers.ZeroPadding2D(padding=(0,1))(image_input)
+        x = layers.Conv2D(y, (y, 3), activation='elu')(x)
+        x = self.Reshape()(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.ZeroPadding2D(padding=(0,1))(x)
+        x = layers.Conv2D(y, (y, 3), activation='elu')(x)
+        x = self.Reshape()(x)
+        x = layers.BatchNormalization()(x)
 
-        model.add(layers.ZeroPadding2D(padding=(0,1), input_shape=self.input_shape))
-        model.add(layers.Conv2D(y, (y, 3), activation='elu'))
-        model.add(self.Reshape())
-        model.add(layers.BatchNormalization())
-        model.add(layers.ZeroPadding2D(padding=(0,1)))
-        model.add(layers.Conv2D(y, (y, 3), activation='elu'))
-        model.add(self.Reshape())
-        model.add(layers.BatchNormalization())
+        x = layers.MaxPooling2D((2, 2))(x)
+       
+        x = layers.ZeroPadding2D(padding=(0,1))(x)
+        x = layers.Conv2D(int(y/2), (int(y/2), 3), activation='elu')(x)
+        x = self.Reshape()(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.ZeroPadding2D(padding=(0,1))(x)
+        x = layers.Conv2D(int(y/2), (int(y/2), 3), activation='elu')(x)
+        x = self.Reshape()(x)
+        x = layers.BatchNormalization()(x)
 
-        model.add(layers.MaxPooling2D((2, 2)))
-        
-        model.add(layers.ZeroPadding2D(padding=(0,1)))
-        model.add(layers.Conv2D(int(y/2), (int(y/2), 3), activation='elu'))
-        model.add(self.Reshape())
-        model.add(layers.BatchNormalization())
-        model.add(layers.ZeroPadding2D(padding=(0,1)))
-        model.add(layers.Conv2D(int(y/2), (int(y/2), 3), activation='elu'))
-        model.add(self.Reshape())
-        model.add(layers.BatchNormalization())
+        x = layers.MaxPooling2D((2, 2))(x)
 
-        model.add(layers.MaxPooling2D((2, 2)))
-
-        model.add(layers.Flatten())
-        model.add(layers.Dropout(0.5))
-        model.add(layers.Dense(32, activation='relu'))
-        model.add(layers.Dropout(0.3))
+        x = layers.Flatten()(x)
+        x = layers.Dropout(0.5)(x)
+        if self.with_z:
+            x = layers.concatenate([x, z_input, z_err_input])
+        x = layers.Dense(32, activation='relu')(x)
+        x = layers.Dropout(0.3)(x)
 
         if self.categorical:
-            model.add(layers.Dense(self.num_types, activation='softmax'))
+            sn_type_pred = layers.Dense(self.num_types, activation='softmax', name="label")(x)
         else:
-            model.add(layers.Dense(1, activation='sigmoid'))
+            sn_type_pred = layers.Dense(1, activation='sigmoid', name="label")(x)
         
+        model = Model(inputs=inputs, outputs=[sn_type_pred])
         opt = optimizers.Adam(learning_rate=1e-4)
         loss = 'sparse_categorical_crossentropy' if self.categorical else 'binary_crossentropy'
         print(metrics)
@@ -247,8 +255,8 @@ class SconeClassifier():
         return raw_dataset
 
     def _retrieve_data(self, raw_dataset):
-        dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical, self.has_ids), num_parallel_calls=40)
-        self.types = [0,1] if not self.categorical else np.unique([data[1] for data in dataset])
+        dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.has_ids, self.with_z), num_parallel_calls=40)
+        self.types = [0,1] if not self.categorical else range(0, self.num_types)
 
         return dataset.apply(tf.data.experimental.ignore_errors())
 
@@ -268,6 +276,7 @@ class SconeClassifier():
         test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if self.use_test_set else None
 
         if self.has_ids:
+            # TODO: maybe don't actually extract the ids - too time-consuming, not that useful
             return extract_ids_and_batch(train_set, val_set, test_set, self.batch_size)
         else:
             train_set = train_set.batch(self.batch_size)

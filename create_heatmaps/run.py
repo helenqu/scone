@@ -9,7 +9,7 @@ SBATCH_HEADER = """#!/bin/bash
 #SBATCH --qos=regular
 #SBATCH -N 1
 #SBATCH --cpus-per-task=32
-#SBATCH --time=40:00:00
+#SBATCH --time=20:00:00
 #SBATCH --output={log_path}
 
 export OMP_PROC_BIND=true
