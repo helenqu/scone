@@ -27,6 +27,7 @@ IA_FRACTION = config["Ia_fraction"]
 WANT_PEAKMJD = config.get("has_peakmjd", True)
 CATEGORICAL_MIN_PER_TYPE = config["categorical_min_per_type"]
 CATEGORICAL_MAX_PER_TYPE = config["categorical_max_per_type"]
+CUTS = []
 
 if not os.path.exists(OUTPUT_PATH):
     os.makedirs(OUTPUT_PATH, exist_ok=True)
@@ -156,8 +157,8 @@ if not FROM_JSON:
             metadata['true_peakmjd'] = peak_mjd
             metadata.to_csv(metadata_path, index=False)
 
-        passed_cut_current = apply_cuts(metadata, lcdata, [10000, 5, 10, 30])
-        #[50, 5, 10, 30] thresholds = [time to first detection <= 50, num detections >= 5, snr > 10, active time >= 30 days]
+        passed_cut_current = apply_cuts(metadata, lcdata, CUTS) if len(CUTS) != 0 else [np.string_(f"{SN_TYPE_ID_MAP[row.true_target]}_{row.object_id}") for row in metadata[metadata.true_target.isin(SN_TYPE_ID_MAP.keys())].itertuples()]
+            #[50, 5, 10, 30] thresholds = [time to first detection <= 50, num detections >= 5, snr > 10, active time >= 30 days]
         passed_cut_ids_with_type = np.concatenate((passed_cut_ids_with_type, passed_cut_current))
         for sn_id in passed_cut_current:
             sn_type, _ = str(sn_id).split("_")

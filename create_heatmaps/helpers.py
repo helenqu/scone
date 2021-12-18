@@ -1,9 +1,100 @@
 import tensorflow as tf
 import numpy as np
+import pandas as pd
 from scipy.optimize import minimize
 from functools import partial
 import george
 from george import kernels
+from astropy.table import Table
+import yaml
+import os
+
+def get_band_to_wave(survey):
+    if survey == 'NGRST' or survey == 'WFIRST':
+        return {
+            "R": 6296.73,
+            "Z": 8744.77,
+            "Y": 10653.88,
+            "J": 12975.72,
+            "H": 15848.21,
+            "F": 18475.41
+        }
+    if survey == 'LSST' or survey == 'DES':
+        return {
+            "u": 3670.69,
+            "g": 4826.85,
+            "r": 6223.24,
+            "i": 7545.98,
+            "z": 8590.90,
+            "Y": 9710.28
+        }
+    raise ValueError(f"survey {survey} not registered! contact helenqu@sas.upenn.edu")
+
+def read_fits(fname, drop_separators=False):
+    """Load SNANA formatted data and cast it to a PANDAS dataframe
+
+    Args:
+        fname (str): path + name to PHOT.FITS file
+        drop_separators (Boolean): if -777 are to be dropped
+
+    Returns:
+        (astropy.table.Table) dataframe from PHOT.FITS file (with ID)
+        (pandas.DataFrame) dataframe from HEAD.FITS file
+    """
+
+    # load photometry
+    lcdata = Table.read(fname, format='fits')
+
+    if len(lcdata) == 0:
+        print(f"{fname} empty!!")
+        return lcdata, lcdata
+    # failsafe
+    if lcdata['MJD'][-1] == -777.0:
+        lcdata.remove_row(-1)
+    if lcdata['MJD'][0] == -777.0:
+        lcdata.remove_row(-1)
+
+    # load header
+    header = Table.read(fname.replace("PHOT", "HEAD"), format="fits")
+    df_header = header.to_pandas()
+    df_header["SNID"] = df_header["SNID"].astype(np.int32)
+
+    # add SNID to phot for skimming
+    arr_ID = np.zeros(len(lcdata), dtype=np.int32)
+    # New light curves are identified by MJD == -777.0
+    arr_idx = np.where(lcdata["MJD"] == -777.0)[0]
+    arr_idx = np.hstack((np.array([0]), arr_idx, np.array([len(lcdata)])))
+    # Fill in arr_ID
+    for counter in range(1, len(arr_idx)):
+        start, end = arr_idx[counter - 1], arr_idx[counter]
+        # index starts at zero
+        arr_ID[start:end] = df_header.SNID.iloc[counter - 1]
+    lcdata["SNID"] = arr_ID
+
+    if drop_separators:
+        lcdata = lcdata[lcdata['MJD'] != -777.000]
+
+    parent_dir_path = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(parent_dir_path, "default_gentype_to_typename.yml"), "r") as cfgfile:
+        config = yaml.load(cfgfile)
+
+    df_header = df_header[["SNID", "SNTYPE", "PEAKMJD", "REDSHIFT_FINAL", "REDSHIFT_FINAL_ERR", "MWEBV"]]
+    df_header = df_header.rename(columns={"SNID":"object_id", "SNTYPE": "true_target", "PEAKMJD": "true_peakmjd", "REDSHIFT_FINAL": "true_z", "REDSHIFT_FINAL_ERR": "true_z_err", "MWEBV": "mwebv"})
+    df_header.replace({"true_target": config["gentype_to_typename"]}, inplace=True)
+    #TODO: diff this with an optional user input dict
+    
+    band_colname = "FLT" if "FLT" in lcdata.columns else "BAND" # check for filter column name from different versions of SNANA
+    lcdata = lcdata[["SNID", "MJD", band_colname, "FLUXCAL", "FLUXCALERR"]]
+    rename_columns = {"SNID":"object_id", "MJD": "mjd", band_colname: "passband", "FLUXCAL": "flux", "FLUXCALERR": "flux_err"}
+    for old_colname, new_colname in rename_columns.items():
+        lcdata.rename_column(old_colname, new_colname)
+    # passband_dict = {'u': 0, 'g': 1, 'r': 2, 'i': 3, 'z': 4, 'Y': 5}
+    # print("num rows with unexpected passband: {}".format(lcdata[~lcdata['passband'] in passband_dict]))
+    # lcdata['passband'] = [passband_dict[x.strip()] if x.strip() in passband_dict else -1 for x in lcdata['passband']]
+    # lcdata = lcdata[lcdata['passband'] != -1]
+
+
+    return df_header, lcdata
 
 def build_gp(guess_length_scale, sn_data, bands):
 

@@ -8,7 +8,7 @@ import argparse
 import h5py
 import time
 import abc
-from create_heatmaps.helpers import build_gp, image_example, get_extinction
+from create_heatmaps.helpers import build_gp, image_example, get_extinction, read_fits, get_band_to_wave
 
 class CreateHeatmapsBase(abc.ABC):
     def __init__(self, config, index):
@@ -17,12 +17,10 @@ class CreateHeatmapsBase(abc.ABC):
         # file paths 
         self.metadata_path = config["metadata_paths"][index]
         self.lcdata_path = config["lcdata_paths"][index]
-        self.ids_path = config["ids_path"] if "ids_path" in config else None
         self.output_path = config["heatmaps_path"]
         self.finished_filenames_path = os.path.join(self.output_path, "finished_filenames.csv")
 
         # heatmap parameters / metadata
-        self.sn_type_id_map = config["sn_type_id_to_name"]
         self.wavelength_bins = config["num_wavelength_bins"]
         self.mjd_bins = config["num_mjd_bins"]
         self.has_peakmjd = config.get("has_peakmjd", True)
@@ -31,8 +29,16 @@ class CreateHeatmapsBase(abc.ABC):
 
         # heatmap labeling
         self.categorical = config["categorical"]
-        self.type_to_int_label = {0: "non-Ia", 1: "SNIa"} if not self.categorical else {v:i for i,v in enumerate(sorted(self.sn_type_id_map.values()))}
+        self.types = config["types"]
+        self.type_to_int_label = {type:0 if type != "SNIa" else 1 for type in self.types} if not self.categorical else {v:i for i,v in enumerate(sorted(self.types))}
         print(f"type to int label: {self.type_to_int_label}")
+
+        # restricting number of heatmaps that are made
+        self.Ia_fraction = config.get("Ia_fraction", None)
+        self.categorical_max_per_type = config.get("categorical_max_per_type", None)
+
+        # survey info
+        self.band_to_wave = get_band_to_wave(config["survey"])
 
         self.load_data()
 
@@ -44,23 +50,22 @@ class CreateHeatmapsBase(abc.ABC):
             if os.path.basename(self.metadata_path) in finished_filenames:
                 print("file has already been processed, exiting")
                 sys.exit(0)
-
-        self.metadata = pd.read_csv(self.metadata_path, compression="gzip") if os.path.splitext(self.metadata_path)[1] == ".gz" else pd.read_csv(self.metadata_path)
-        metadata_ids = self.metadata[self.metadata.true_target.isin(self.sn_type_id_map.keys())].object_id
-
-        lcdata = pd.read_csv(self.lcdata_path, compression="gzip") if os.path.splitext(self.lcdata_path)[1] == ".gz" else pd.read_csv(self.lcdata_path)
-        self.lcdata = Table.from_pandas(lcdata)
-        self.lcdata.add_index('object_id')
-        self.lcdata_ids = np.intersect1d(self.lcdata['object_id'], metadata_ids)
         
-        if self.ids_path:
-            ids_file = h5py.File(self.ids_path, "r")
-            self.ids = [x.decode('utf-8') for x in ids_file["names"]]
-            ids_file.close()
+        self.metadata, self.lcdata = read_fits(self.lcdata_path)
+        metadata_ids = self.metadata[self.metadata.true_target.isin(self.types)].object_id
+
+        self.lcdata.add_index('object_id')
+        self.lcdata['passband'] = [flt.strip() for flt in self.lcdata['passband']]
+        self.lcdata_ids = np.intersect1d(self.lcdata['object_id'], metadata_ids)
+        self.ids = self.get_ids() if self.categorical_max_per_type else None
+
+        if self.ids is not None:
             print("job {}: found ids, expect {} total heatmaps".format(self.index, len(self.ids)), flush=True)
         else:
-            self.ids = None
             print("job {}: no ids, expect {} total heatmaps".format(self.index, len(self.lcdata_ids)), flush=True)
+
+    def get_ids(self):
+       return np.random.choice(self.lcdata_ids, self.categorical_max_per_type, replace=False)
 
     @abc.abstractmethod
     def run(self):
@@ -72,6 +77,9 @@ class CreateHeatmapsBase(abc.ABC):
         pass
 
     def create_heatmaps(self, output_paths, mjd_minmaxes, fit_on_full_lc=True):
+        #TODO: infer this from config file rather than making the subclasses pass it in
+        self.fit_on_full_lc = fit_on_full_lc
+            
         for output_path, mjd_minmax in zip(output_paths, mjd_minmaxes):
             if not os.path.exists(output_path):
                 os.makedirs(output_path)
@@ -80,56 +88,22 @@ class CreateHeatmapsBase(abc.ABC):
             self.done_by_type = {}
             self.removed_by_type = {}
             self.done_ids = []
-
+            
             timings = []
             with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(output_path, self.index)) as writer:
                 for i, sn_id in enumerate(self.lcdata_ids):
                     if i % 1000 == 0:
                         print("job {}: processing {} of {}".format(self.index, i, len(self.lcdata_ids)), flush=True)
+
                     start = time.time()
                     
-                    sn_data = self._get_sn_data(sn_id)
-                    if not sn_data:
-                        continue
-                    sn_metadata, sn_lcdata, sn_name = sn_data
-                    filter_to_band_number = {
-                        "b'u '": 0,
-                        "b'g '": 1,
-                        "b'r '": 2,
-                        "b'i '": 3,
-                        "b'z '": 4,
-                        "b'Y '": 5
-                    }
-                    replaced_passband = [filter_to_band_number[elem] if elem in filter_to_band_number else int(elem) for elem in sn_lcdata['passband']]
-                    sn_lcdata['passband'] = replaced_passband
-
-                    mjd_range = self._calculate_mjd_range(sn_metadata, sn_lcdata, mjd_minmax, self.has_peakmjd)
-                    if not mjd_range:
+                    sn_name, *sn_data = self._get_sn_data(sn_id, mjd_minmax)
+                    if sn_data[0] is None:
                         self._remove(sn_name)
                         continue
-
-                    if not fit_on_full_lc:
-                        mjds = sn_lcdata['mjd']
-                        mask = np.logical_and(mjds >= mjd_range[0], mjds <= mjd_range[1])
-                        if not mask.any(): # if all false
-                            print("empty sn data after mjd mask", mjd_range, np.min(mjds), np.max(mjds))
-                            self._remove(sn_name)
-                            continue
-                        sn_lcdata = sn_lcdata[mask]
-
-                    sn_lcdata.add_row([min(sn_lcdata['mjd'])-100, 0, 0, 0])
-                    sn_lcdata.add_row([max(sn_lcdata['mjd'])+100, 0, 0, 0])
-
-                    band_to_wave = {
-                        0: 3670.69,
-                        1: 4826.85,
-                        2: 6223.24,
-                        3: 7545.98,
-                        4: 8590.90,
-                        5: 9710.28
-                    }
-                    wave = [band_to_wave[elem] for elem in sn_lcdata['passband']]
-
+                    sn_metadata, sn_lcdata, mjd_range = sn_data
+                    wave = [self.band_to_wave[elem] for elem in sn_lcdata['passband']]
+                
                     gp = build_gp(20, sn_lcdata, wave)
                     if gp == None:
                         self._remove(sn_name)
@@ -148,6 +122,7 @@ class CreateHeatmapsBase(abc.ABC):
 
                     z = sn_metadata['true_z'].iloc[0]
                     z_err = sn_metadata['true_z_err'].iloc[0]
+                    
                     writer.write(image_example(heatmap.flatten().tobytes(), self.type_to_int_label[sn_name], sn_id, z, z_err))
                     timings.append(time.time() - start)
 
@@ -172,20 +147,44 @@ class CreateHeatmapsBase(abc.ABC):
                 f.write("removed: {}\n".format(str(self.removed_by_type).replace("'", "")))
 
     # HELPER FUNCTIONS
-    def _get_sn_data(self, sn_id):
+    def _get_sn_data(self, sn_id, mjd_minmax):
+        #TODO: find a better thing to early return
         sn_metadata = self.metadata[self.metadata.object_id == sn_id]
         if sn_metadata.empty:
-            return None
+            print("sn metadata empty")
+            return None, None
 
-        sn_name = self.sn_type_id_map[sn_metadata.true_target.iloc[0]]
-        not_in_ids = self.ids and "{}_{}".format(sn_name, sn_id) not in self.ids
+        sn_name = sn_metadata.true_target.iloc[0]
+        not_in_ids = self.ids is not None and sn_id not in self.ids
         already_done = sn_id in self.done_ids
         if not_in_ids or already_done:
-            return None
+            return sn_name, None
 
         sn_lcdata = self.lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
-        
-        return sn_metadata, sn_lcdata, sn_name
+
+        expected_filters = list(self.band_to_wave.keys())
+        sn_lcdata = sn_lcdata[np.isin(sn_lcdata['passband'], expected_filters)] 
+        if len(sn_lcdata) == 0: 
+            print("expected filters filtering not working") 
+            return sn_name, None
+
+        mjd_range = self._calculate_mjd_range(sn_metadata, sn_lcdata, mjd_minmax, self.has_peakmjd)
+        if not mjd_range:
+            print("mjd range is none") 
+            return sn_name, None
+
+        if not self.fit_on_full_lc:
+            mjds = sn_lcdata['mjd']
+            mask = np.logical_and(mjds >= mjd_range[0], mjds <= mjd_range[1])
+            if not mask.any(): # if all false
+                print("empty sn data after mjd mask", mjd_range, np.min(mjds), np.max(mjds))
+                return sn_name, None
+            sn_lcdata = sn_lcdata[mask]
+
+        sn_lcdata.add_row([min(sn_lcdata['mjd'])-100, 0, 0, expected_filters[2]])
+        sn_lcdata.add_row([max(sn_lcdata['mjd'])+100, 0, 0, expected_filters[2]])
+
+        return sn_name, sn_metadata, sn_lcdata, mjd_range
 
     def _remove(self, sn_name):
         self.removed_by_type[sn_name] = 1 if sn_name not in self.removed_by_type else self.removed_by_type[sn_name] + 1

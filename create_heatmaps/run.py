@@ -2,6 +2,9 @@ import os
 import yaml
 import argparse
 import subprocess
+from astropy.table import Table
+import numpy as np
+from collections import Counter
 
 # TODO: give people the option to use sbatch instead of MP? but how to create system-agnostic sbatch header
 SBATCH_HEADER = """#!/bin/bash
@@ -22,6 +25,8 @@ python create_heatmaps_job.py --config_path {config_path} --start {start} --end 
 
 LOG_OUTPUT_PATH = os.path.join(os.path.expanduser('~'), "scone_shellscripts")
 SBATCH_FILE = os.path.join(LOG_OUTPUT_PATH, "autogen_heatmaps_batchfile_{index}.sh")
+PARENT_DIR_PATH = os.path.dirname(os.path.abspath(__file__))
+SCONE_PATH = os.path.dirname(PARENT_DIR_PATH) #TODO: this directory structure might change
 
 if not os.path.exists(LOG_OUTPUT_PATH):
     os.makedirs(LOG_OUTPUT_PATH)
@@ -36,11 +41,32 @@ def load_config(config_path):
     return config
 
 config = load_config(args.config_path)
-if "input_path" in config:
-    config['metadata_paths'] = [f.path for f in os.scandir(config["input_path"]) if "HEAD.csv" in f.name]
+gentype_config = load_config(os.path.join(PARENT_DIR_PATH, "default_gentype_to_typename.yml"))["gentype_to_typename"]
+
+print(config)
+# autogenerate some parts of config
+if "input_path" in config and 'metadata_paths' not in config:
+    config['metadata_paths'] = [f.path for f in os.scandir(config["input_path"]) if "HEAD" in f.name]
     config['lcdata_paths'] = [path.replace("HEAD", "PHOT") for path in config['metadata_paths']]
-    with open(args.config_path, "w") as f:
-        f.write(yaml.dump(config))
+
+# count number of objects per sntype
+sntype_to_abundance = Counter()
+for metadata_path in config['metadata_paths']:
+    metadata = Table.read(metadata_path, format='fits')
+    sntype_to_abundance += Counter(metadata['SNTYPE'])
+config['types'] = [gentype_config[int(sntype)] for sntype in sntype_to_abundance.keys()]
+print(config['types'])
+
+if "Ia_fraction" in config:
+    if config["Ia_fraction"] == "categorical":
+        config['categorical_max_per_type'] = min(sntype_to_abundance.values())
+    else: # should be a number \in [0,1]
+        num_Ias = sntype_to_abundance.get("SNIa", 0)
+        num_non_Ias = np.sum(sntype_to_abundance.values()) - num_Ias
+        #TODO: finish this
+
+with open(args.config_path, "w") as f:
+    f.write(yaml.dump(config))
 
 num_paths = len(config["lcdata_paths"])
 
@@ -53,7 +79,7 @@ for j in range(int(num_paths/num_simultaneous_jobs)+1):
 
     print("start: {}, end: {}".format(start, end))
     sbatch_setup_dict = {
-        "scone_path": os.path.dirname(os.path.dirname(os.path.abspath(__file__))), # parent directory of this file
+        "scone_path": SCONE_PATH,
         "config_path": args.config_path,
         "log_path": os.path.join(LOG_OUTPUT_PATH, f"CREATE_HEATMAPS__{os.path.basename(args.config_path)}.log"),
         "index": j,
