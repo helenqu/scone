@@ -6,6 +6,7 @@ from functools import partial
 import george
 from george import kernels
 from astropy.table import Table
+from astropy.io import fits
 import yaml
 import os
 
@@ -30,7 +31,7 @@ def get_band_to_wave(survey):
         }
     raise ValueError(f"survey {survey} not registered! contact helenqu@sas.upenn.edu")
 
-def read_fits(fname, drop_separators=False):
+def read_fits(fname, sn_type_id_to_name, drop_separators=False):
     """Load SNANA formatted data and cast it to a PANDAS dataframe
 
     Args:
@@ -55,6 +56,9 @@ def read_fits(fname, drop_separators=False):
         lcdata.remove_row(-1)
 
     # load header
+    metadata_hdu = fits.open(fname.replace("PHOT", "HEAD"))
+    survey = metadata_hdu[0].header["SURVEY"]
+
     header = Table.read(fname.replace("PHOT", "HEAD"), format="fits")
     df_header = header.to_pandas()
     df_header["SNID"] = df_header["SNID"].astype(np.int32)
@@ -74,37 +78,25 @@ def read_fits(fname, drop_separators=False):
     if drop_separators:
         lcdata = lcdata[lcdata['MJD'] != -777.000]
 
-    parent_dir_path = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(parent_dir_path, "default_gentype_to_typename.yml"), "r") as cfgfile:
-        config = yaml.load(cfgfile)
-
     df_header = df_header[["SNID", "SNTYPE", "PEAKMJD", "REDSHIFT_FINAL", "REDSHIFT_FINAL_ERR", "MWEBV"]]
     df_header = df_header.rename(columns={"SNID":"object_id", "SNTYPE": "true_target", "PEAKMJD": "true_peakmjd", "REDSHIFT_FINAL": "true_z", "REDSHIFT_FINAL_ERR": "true_z_err", "MWEBV": "mwebv"})
-    df_header.replace({"true_target": config["gentype_to_typename"]}, inplace=True)
-    #TODO: diff this with an optional user input dict
+    df_header.replace({"true_target": sn_type_id_to_name}, inplace=True)
     
     band_colname = "FLT" if "FLT" in lcdata.columns else "BAND" # check for filter column name from different versions of SNANA
     lcdata = lcdata[["SNID", "MJD", band_colname, "FLUXCAL", "FLUXCALERR"]]
     rename_columns = {"SNID":"object_id", "MJD": "mjd", band_colname: "passband", "FLUXCAL": "flux", "FLUXCALERR": "flux_err"}
     for old_colname, new_colname in rename_columns.items():
         lcdata.rename_column(old_colname, new_colname)
-    # passband_dict = {'u': 0, 'g': 1, 'r': 2, 'i': 3, 'z': 4, 'Y': 5}
-    # print("num rows with unexpected passband: {}".format(lcdata[~lcdata['passband'] in passband_dict]))
-    # lcdata['passband'] = [passband_dict[x.strip()] if x.strip() in passband_dict else -1 for x in lcdata['passband']]
-    # lcdata = lcdata[lcdata['passband'] != -1]
 
-
-    return df_header, lcdata
+    return df_header, lcdata, survey
 
 def build_gp(guess_length_scale, sn_data, bands):
-
     """This is  all  taken from Avacado -
     see https://github.com/kboone/avocado/blob/master/avocado/astronomical_object.py
     In this a 2D matern kernal is used  to  model the transient. The kernel
     width in the wavelength direction is fixed. We fit for the kernel width
     in the time direction"""
 
-#     sn_data = sn_data.reset_index(drop=True)
     mjdall = sn_data['mjd']
     fluxall = sn_data['flux']
     flux_errall = sn_data['flux_err']

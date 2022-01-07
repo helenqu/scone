@@ -23,7 +23,7 @@ def get_images(raw_record, input_shape, has_ids=False, with_z=False):
     image = tf.reshape(tf.io.decode_raw(example['image_raw'], tf.float64), input_shape)
     image = image / tf.reduce_max(image[:,:,0])
 
-    # TODO: have to subtract 1 from label to get rid of KN in early classification
+    # TODO: have to subtract 1 from label to get rid of KN in early classification dataset
     if with_z:
         output = [{"image": image, "z": example["z"], "z_err": example["z_err"]}, {"label": example['label']-1}]
     else:

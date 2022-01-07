@@ -24,21 +24,16 @@ class CreateHeatmapsBase(abc.ABC):
         self.wavelength_bins = config["num_wavelength_bins"]
         self.mjd_bins = config["num_mjd_bins"]
         self.has_peakmjd = config.get("has_peakmjd", True)
-        self.early_lightcurves = config.get("early_lightcurves", False)
-        self.early_lightcurves_mixed = config.get("early_lightcurves_mixed", False)
 
         # heatmap labeling
         self.categorical = config["categorical"]
         self.types = config["types"]
-        self.type_to_int_label = {type:0 if type != "SNIa" else 1 for type in self.types} if not self.categorical else {v:i for i,v in enumerate(sorted(self.types))}
+        self.sn_type_id_to_name = config["sn_type_id_to_name"] # SNANA type ID to type name (i.e. 42 -> SNII)
+        self.type_to_int_label = {type: 0 if type != "SNIa" else 1 for type in self.types} if not self.categorical else {v:i for i,v in enumerate(sorted(self.types))} # int label for classification
         print(f"type to int label: {self.type_to_int_label}")
 
         # restricting number of heatmaps that are made
-        self.Ia_fraction = config.get("Ia_fraction", None)
-        self.categorical_max_per_type = config.get("categorical_max_per_type", None)
-
-        # survey info
-        self.band_to_wave = get_band_to_wave(config["survey"])
+        self.ids_path = config.get("ids_path", None)
 
         self.load_data()
 
@@ -51,21 +46,24 @@ class CreateHeatmapsBase(abc.ABC):
                 print("file has already been processed, exiting")
                 sys.exit(0)
         
-        self.metadata, self.lcdata = read_fits(self.lcdata_path)
+        self.metadata, self.lcdata, survey = read_fits(self.lcdata_path, self.sn_type_id_to_name)
         metadata_ids = self.metadata[self.metadata.true_target.isin(self.types)].object_id
 
         self.lcdata.add_index('object_id')
         self.lcdata['passband'] = [flt.strip() for flt in self.lcdata['passband']]
         self.lcdata_ids = np.intersect1d(self.lcdata['object_id'], metadata_ids)
-        self.ids = self.get_ids() if self.categorical_max_per_type else None
 
-        if self.ids is not None:
-            print("job {}: found ids, expect {} total heatmaps".format(self.index, len(self.ids)), flush=True)
-        else:
-            print("job {}: no ids, expect {} total heatmaps".format(self.index, len(self.lcdata_ids)), flush=True)
+        # survey info
+        self.band_to_wave = get_band_to_wave(survey)
 
-    def get_ids(self):
-       return np.random.choice(self.lcdata_ids, self.categorical_max_per_type, replace=False)
+        if self.ids_path:
+            ids_file = h5py.File(self.ids_path, "r")
+            self.ids = ids_file["ids"][()] # turn this into a numpy array
+            print(f"example id {self.ids[0]}")
+            ids_file.close()
+        self.has_ids = self.ids_path and self.ids is not None
+        self.ids_for_current_file = np.intersect1d(self.lcdata_ids, self.ids) if self.has_ids else self.lcdata_ids
+        print(f"job {self.index}: {'found' if self.has_ids else 'no'} ids, expect {len(self.ids_for_current_file)}/{len(self.lcdata_ids)} heatmaps for this file", flush=True)
 
     @abc.abstractmethod
     def run(self):
@@ -90,12 +88,14 @@ class CreateHeatmapsBase(abc.ABC):
             self.done_ids = []
             
             timings = []
+            start = time.time()
             with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(output_path, self.index)) as writer:
-                for i, sn_id in enumerate(self.lcdata_ids):
+                for i, sn_id in enumerate(self.ids_for_current_file):
                     if i % 1000 == 0:
-                        print("job {}: processing {} of {}".format(self.index, i, len(self.lcdata_ids)), flush=True)
-
-                    start = time.time()
+                        print("job {}: processing {} of {}".format(self.index, i, len(self.ids_for_current_file)), flush=True)
+                        if i == 1000:
+                            time_to_1000 = time.time() - start
+                            print(f"took {time_to_1000} sec for 1000 heatmaps; expected total time: {(len(self.ids_for_current_file)/1000)*time_to_1000} sec")
                     
                     sn_name, *sn_data = self._get_sn_data(sn_id, mjd_minmax)
                     if sn_data[0] is None:
@@ -124,11 +124,7 @@ class CreateHeatmapsBase(abc.ABC):
                     z_err = sn_metadata['true_z_err'].iloc[0]
                     
                     writer.write(image_example(heatmap.flatten().tobytes(), self.type_to_int_label[sn_name], sn_id, z, z_err))
-                    timings.append(time.time() - start)
-
                     self._done(sn_name, sn_id)
-
-            pd.DataFrame({"timings": timings}).to_csv(os.path.join(output_path, "timings.csv"), index=False)
 
             if not os.path.exists(self.finished_filenames_path):
                 pd.DataFrame({"filenames": [os.path.basename(self.metadata_path)]}).to_csv(self.finished_filenames_path, index=False)
@@ -155,9 +151,8 @@ class CreateHeatmapsBase(abc.ABC):
             return None, None
 
         sn_name = sn_metadata.true_target.iloc[0]
-        not_in_ids = self.ids is not None and sn_id not in self.ids
         already_done = sn_id in self.done_ids
-        if not_in_ids or already_done:
+        if already_done:
             return sn_name, None
 
         sn_lcdata = self.lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
