@@ -13,7 +13,7 @@ args = parser.parse_args()
 
 def load_config(config_path):
     with open(config_path, "r") as cfgfile:
-        config = yaml.load(cfgfile)
+        config = yaml.load(cfgfile, Loader=yaml.Loader)
     return config
 
 def create_heatmaps(config, index):
@@ -35,17 +35,19 @@ for i, proc in enumerate(procs):
     if proc.exitcode != 0:
         failed_procs.append(i)
 
-if len(failed_procs) == 0:
-    donefile_info = "SUCCESS"
-    exit_code = 0
-else:
+# if len(failed_procs) == 0:
+#     donefile_info = "SUCCESS"
+if len(failed_procs) > 0:
     donefile_info = "CREATE HEATMAPS FAILURE\nindices of failed create heatmaps jobs: {}\ncheck out the LC data files or metadata files at those indices in the config yml at {}\nlogs located at create_heatmaps_i.log, i=failed index".format(failed_procs, args.config_path)
-    exit_code = 1
-
-donefile_path = config.get("donefile", os.path.join(config["heatmaps_path"], "done.txt"))
-if not os.path.exists(config["heatmaps_path"]):
-    os.makedirs(config["heatmaps_path"])
-with open(donefile_path, "w+") as donefile:
-    donefile.write(donefile_info)
+    donefile_path = config.get("donefile", os.path.join(config["heatmaps_path"], "done.txt"))
+    
+    if not os.path.exists(config["heatmaps_path"]):
+        os.makedirs(config["heatmaps_path"])
+    with open(donefile_path, "w+") as donefile:
+        donefile.write(donefile_info)
+   
+   exit_code = 1
+else:
+   exit_code = 0
 
 sys.exit(exit_code)

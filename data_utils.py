@@ -25,11 +25,11 @@ def get_images(raw_record, input_shape, has_ids=False, with_z=False):
 
     # TODO: have to subtract 1 from label to get rid of KN in early classification dataset
     if with_z:
-        output = [{"image": image, "z": example["z"], "z_err": example["z_err"]}, {"label": example['label']-1}]
+        output = [{"image": image, "z": example["z"], "z_err": example["z_err"]}, {"label": example['label']}]
     else:
         output = [{"image": image}, {"label": example['label']}]
     if has_ids:
-        return output.append(tf.cast(example['id'], tf.int32))
+        output.append({"id": tf.cast(example['id'], tf.int32)})
     return output
 
 # balances classes, splits dataset into train/validation/test sets

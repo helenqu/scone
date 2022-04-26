@@ -6,56 +6,60 @@ import argparse
 import pandas as pd
 import time
 import json
+import subprocess
 
-start = time.time()
-# GET CONFIG PATH
-parser = argparse.ArgumentParser(description='set up the SCONE model')
-parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/config.yml"')
-args = parser.parse_args()
+# assumes we're using cori gpu
+SBATCH_HEADER = """#!/bin/bash
+#SBATCH -C gpu
+#SBATCH --nodes 1
+#SBATCH -G {num_gpus}
+#SBATCH -c {num_cpus}
+#SBATCH --time=04:00:00
+#SBATCH --output={log_path}
 
-with open(args.config_path, "r") as cfgfile:
-    config = yaml.load(cfgfile)
+module purge && module load cgpu
+module load tensorflow/gpu-2.2.0-py37
+cd {scone_path}
+srun python model_utils.py --config_path {config_path}"""
 
-# MANUAL: TRAIN + TEST
-# model = SconeClassifier(args.config_path)
-# _, history = model.train()
-# pd.DataFrame(history.history).to_csv(os.path.join(OUTPUT_PATH, "training_history.csv"))
-# test_acc = model.test()
 
-# MANUAL: TRAIN + PREDICT
-# trained_model, history = model.train()
-# test_set, test_ids = model.get_test_set()
-# trained_model.predict(test_set, test_ids)
+def load_config(config_path):
+    with open(config_path, "r") as cfgfile:
+        config = yaml.load(cfgfile)
+    return config
 
-# FOR CROSS-TRAINING/TESTING ON DIFF IA MODELS
-# def run(config, i):
-#     print(config)
-#     _, history = SconeClassifierIaModels(config).run()
-#     with open("{}/history_snoopy_{}.json".format("/global/homes/h/helenqu", i), "w") as outfile:
-#         json.dump(history.history, outfile)
-# procs = []
-# for i in range(config.get("num_simultaneous_runs", 1)):
-#     proc = mp.Process(target=run, args=(config,i))
-#     proc.start()
-#     procs.append(proc)
-# for proc in procs:
-#     proc.join() # wait until procs are done
-#     print("procs done")
+def format_sbatch_file(config_path, output_path, num_gpus, num_cpus):
+    sbatch_file_path = os.path.join(output_path, "scone_job.sh")
+    log_path = os.path.join(output_path, f"SCONE__{os.path.basename(config_path)}.log")
+    #TODO: currently scone is the immediate parent dir of this file; this directory structure might change
+    scone_path = os.path.dirname(os.path.abspath(__file__)) 
 
-# AUTOMATIC: RUNS TRAIN/TEST/PREDICT AS SPECIFIED BY CONFIG
-preds_dict, history = SconeClassifier(config).run()
+    sbatch_setup_dict = {
+        "scone_path": scone_path,
+        "config_path": config_path,
+        "log_path": log_path,
+        "num_gpus": num_gpus, #TODO: add these config options in as cli args?
+        "num_cpus": num_cpus
+    }
+    sbatch_setup = SBATCH_HEADER.format(**sbatch_setup_dict)
 
-print("######## CLASSIFICATION REPORT ########")
-if "accuracy" in history:
-    print("classification finished in {:.2f}min".format((time.time() - start) / 60))
-    print("last training accuracy value: {}".format(history["accuracy"][-1]))
-    print("last validation accuracy value: {}".format(history["val_accuracy"][-1]))
-if "test_accuracy" in history:
-    print("test accuracy value: {}".format(history["test_accuracy"]))
+    with open(sbatch_file_path, "w+") as f:
+        f.write(sbatch_setup)
+    print(f"launching scone job logging to {log_path}")
 
-with open(config['heatmaps_path'] + '/history.json', 'w') as outfile:
-    json.dump(history, outfile)
+    return sbatch_file_path
 
-with open(config['heatmaps_path'] + '/preds.json', 'w') as outfile:
-    json.dump(preds_dict, outfile)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='set up the SCONE model')
+    parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/config.yml"')
+    args = parser.parse_args()
 
+    scone_config = load_config(args.config_path)
+    output_dir = scone_config["heatmaps_path"]
+
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    sbatch_file_path = format_sbatch_file(args.config_path, output_dir, scone_config.get("num_gpus", 1), scone_config.get("num_cpus", 10))
+    
+    subprocess.run(f"module load esslurm && sbatch {sbatch_file_path}", shell=True)

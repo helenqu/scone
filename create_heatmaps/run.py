@@ -4,25 +4,22 @@ import argparse
 import subprocess
 from astropy.table import Table
 import numpy as np
-from collections import Counter
 import h5py
 
 # TODO: how to create system-agnostic sbatch header
+#SBATCH --cpus-per-task 2
 SBATCH_HEADER = """#!/bin/bash
 #SBATCH -C haswell
 #SBATCH --qos={qos}
+#SBATCH --job-name={job_name}
 #SBATCH --nodes 1
-#SBATCH --ntasks {ntasks}
-#SBATCH --cpus-per-task 2
-#SBATCH --time=00:05:00
+#SBATCH --ntasks={ntasks}
+#SBATCH --time=10:00:00
 #SBATCH --output={log_path}
 
-module load tensorflow/intel-2.2.0-py37
 cd {scone_path}
 python create_heatmaps_job.py --config_path {config_path} --start {start} --end {end}"""
 
-LOG_OUTPUT_DIR = os.path.join(os.path.expanduser('~'), "scone_shellscripts")
-SBATCH_FILE = os.path.join(LOG_OUTPUT_DIR, "autogen_heatmaps_batchfile_{index}.sh")
 PARENT_DIR_PATH = os.path.dirname(os.path.abspath(__file__))
 SCONE_PATH = os.path.dirname(PARENT_DIR_PATH) #TODO: this directory structure might change
 
@@ -33,7 +30,7 @@ def write_config(config, config_path):
 
 def load_config(config_path):
     with open(config_path, "r") as cfgfile:
-        config = yaml.load(cfgfile)
+        config = yaml.load(cfgfile, Loader=yaml.Loader)
     return config
 
 def load_configs(config_path):
@@ -54,7 +51,7 @@ def get_ids_by_sn_name(metadata_paths, sn_type_id_to_name):
     return sntype_to_abundance
 
 # do class balancing
-def class_balance(categorical, abundances, ids_by_sn_name, ids_path):
+def class_balance(categorical, abundances, max_per_type, ids_by_sn_name, ids_path):
     if categorical: 
         num_to_choose = min(abundances.values())
         ids_to_choose_from = list(ids_by_sn_name.values())
@@ -66,6 +63,7 @@ def class_balance(categorical, abundances, ids_by_sn_name, ids_path):
         Ia_ids = ids_by_sn_name["SNIa"]
         non_Ia_ids = [id_ for sntype, ids in ids_by_sn_name.items() for id_ in ids if sntype != "SNIa"]
         ids_to_choose_from = [non_Ia_ids, Ia_ids]
+    num_to_choose = min(num_to_choose, max_per_type)
 
     chosen_ids = []
     for ids_list in ids_to_choose_from:
@@ -76,7 +74,6 @@ def class_balance(categorical, abundances, ids_by_sn_name, ids_path):
     f = h5py.File(ids_path, "w")
     f.create_dataset("ids", data=chosen_ids, dtype=np.int32)
     f.close()
-
 
 # autogenerate some parts of config
 def autofill_scone_config(config):
@@ -94,11 +91,12 @@ def autofill_scone_config(config):
 
     class_balanced = config.get("class_balanced", False)
     categorical = config.get("categorical", False)
+    max_per_type = config.get("max_per_type", 100_000_000)
 
     print(f"class balancing {'not' if not class_balanced else ''} applied for {'categorical' if categorical else 'binary'} classification, check 'class_balanced' key if this is not desired")
     if class_balanced: # then write IDs file
         ids_path = f"{config['heatmaps_path']}/ids.hdf5"
-        class_balance(categorical, abundances, ids_by_sn_name, ids_path)
+        class_balance(categorical, abundances, max_per_type, ids_by_sn_name, ids_path)
         config["ids_path"] = ids_path
 
     return config
@@ -112,7 +110,8 @@ def format_sbatch_file(idx):
         "scone_path": SCONE_PATH,
         "config_path": ARGS.config_path,
         "log_path": LOG_PATH,
-        "qos": "regular" if ntasks == NUM_SIMULTANEOUS_JOBS else "shared",
+        "job_name": JOB_NAME.format(**{"index": idx}),
+        "qos": "regular" if ntasks >= MAX_FOR_SHARED_QUEUE else "shared",
         "ntasks": ntasks,
         "index": idx,
         "start": start,
@@ -133,21 +132,27 @@ if __name__ == "__main__":
     parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
     ARGS = parser.parse_args()
 
-    if not os.path.exists(LOG_OUTPUT_DIR):
-        os.makedirs(LOG_OUTPUT_DIR)
-
     SCONE_CONFIG, GENTYPE_CONFIG = load_configs(ARGS.config_path)
+    OUTPUT_DIR = SCONE_CONFIG["heatmaps_path"]
+
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
 
     SCONE_CONFIG = autofill_scone_config(SCONE_CONFIG)
     write_config(SCONE_CONFIG, ARGS.config_path)
 
+    JOB_NAME = f"{SCONE_CONFIG.get('job_base_name', 'scone_create_heatmaps')}" + "__{index}"
+    SBATCH_FILE = os.path.join(OUTPUT_DIR, "create_heatmaps__{index}.sh")
+
     NUM_PATHS = len(SCONE_CONFIG["lcdata_paths"])
     NUM_SIMULTANEOUS_JOBS = 32 # haswell has 32 physical cores
-    LOG_PATH = os.path.join(LOG_OUTPUT_DIR, f"CREATE_HEATMAPS__{os.path.basename(ARGS.config_path)}.log")
+    MAX_FOR_SHARED_QUEUE = NUM_SIMULTANEOUS_JOBS / 2 # can only request up to half a node in shared queue
+    LOG_PATH = os.path.join(OUTPUT_DIR, f"CREATE_HEATMAPS__{os.path.basename(ARGS.config_path)}.log")
 
     print(f"num simultaneous jobs: {NUM_SIMULTANEOUS_JOBS}")
     print(f"num paths: {NUM_PATHS}")
     print(f"logging to {LOG_PATH}")
+
 
     for j in range(int(NUM_PATHS/NUM_SIMULTANEOUS_JOBS)+1):
         sbatch_file = format_sbatch_file(j)

@@ -59,8 +59,8 @@ class CreateHeatmapsEarlyMixed(CreateHeatmapsEarlyBase):
 
 class CreateHeatmapsEarly(CreateHeatmapsEarlyBase):
     def run(self):
-        days_after_trigger = [5]
-        days_before_trigger = -20
+        days_after_trigger = [150]
+        days_before_trigger = -30
         output_paths = [f"{self.output_path}/{days_before_trigger}x{i}_trigger_32x180" for i in days_after_trigger]
         mjd_ranges = [[days_before_trigger, i] for i in days_after_trigger]
 
