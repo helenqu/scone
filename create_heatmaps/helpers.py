@@ -31,7 +31,7 @@ def get_band_to_wave(survey):
         }
     raise ValueError(f"survey {survey} not registered! contact helenqu@sas.upenn.edu")
 
-def read_fits(fname, sn_type_id_to_name, drop_separators=False):
+def read_fits(fname, sn_type_id_to_name, survey_from_config, drop_separators=False):
     """Load SNANA formatted data and cast it to a PANDAS dataframe
 
     Args:
@@ -57,7 +57,7 @@ def read_fits(fname, sn_type_id_to_name, drop_separators=False):
 
     # load header
     metadata_hdu = fits.open(fname.replace("PHOT", "HEAD"))
-    survey = metadata_hdu[0].header["SURVEY"]
+    survey = survey_from_config if survey_from_config else metadata_hdu[0].header["SURVEY"]
 
     header = Table.read(fname.replace("PHOT", "HEAD"), format="fits")
     df_header = header.to_pandas()

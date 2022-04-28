@@ -14,6 +14,8 @@ class CreateHeatmapsBase(abc.ABC):
     def __init__(self, config, index):
         self.index = index
 
+        self.survey = config.get("survey", None)
+
         # file paths 
         self.metadata_path = config["metadata_paths"][index]
         self.lcdata_path = config["lcdata_paths"][index]
@@ -46,7 +48,7 @@ class CreateHeatmapsBase(abc.ABC):
                 print("file has already been processed, exiting")
                 sys.exit(0)
         
-        self.metadata, self.lcdata, survey = read_fits(self.lcdata_path, self.sn_type_id_to_name)
+        self.metadata, self.lcdata, survey = read_fits(self.lcdata_path, self.sn_type_id_to_name, self.survey)
         metadata_ids = self.metadata[self.metadata.true_target.isin(self.types)].object_id
 
         self.lcdata.add_index('object_id')
