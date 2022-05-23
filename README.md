@@ -13,7 +13,7 @@ SCONE classifies supernovae (SNe) by type using multi-band photometry data (ligh
 
 ## Input Data
 SCONE takes in supernova (SN) photometry data in the format output by [SNANA](https://github.com/RickKessler/SNANA) simulations.
-Photometry data must be separated into two types of CSV files: *metadata* and *observation data*.
+Photometry data must be separated into two types of files: *metadata* and *observation data*.
 
 Multiple metadata and observation data files are acceptable (and preferred for large datasets), but there should be a 1-1 correspondence between metadata and observation data files, i.e. the observation data for all objects in a particular metadata file should exist in a single corresponding observation file.
 
@@ -35,7 +35,7 @@ Optional:
 
 ### Observation Data Format
 
-Observation data is expected in CSV format with a minimum of the following columns:
+Observation data is expected in FITS format with a minimum of the following columns:
 * ``SNID``: int, a unique integer ID for each SN that will be used to cross-reference with the metadata
 * ``MJD``: float, the time of the observation, in Modified Julian Days (MJD)
 * ``FLT``: string, filter used for the observation (i.e. 'u', 'g')
