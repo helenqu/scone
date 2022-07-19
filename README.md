@@ -71,3 +71,6 @@ This script reads the config file, performs class balancing if desired, and laun
 ### 3. When the heatmaps are successfully made, run `run_model.py` to run the model on your new heatmaps
 `python {/path/to/scone}/run_model.py --config_path {/path/to/config}`
 > Note: So far this only works on NERSC! If a different computing system is desired, contact helenqu@sas.upenn.edu.
+
+## Use with [Pippin](https://github.com/dessn/Pippin/tree/main)
+coming soon!
