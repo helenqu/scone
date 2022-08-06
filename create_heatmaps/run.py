@@ -6,17 +6,8 @@ from astropy.table import Table
 import numpy as np
 import h5py
 
-# TODO: how to create system-agnostic sbatch header
-#SBATCH --cpus-per-task 2
-SBATCH_HEADER = """#!/bin/bash
-#SBATCH -C haswell
-#SBATCH --qos={qos}
-#SBATCH --job-name={job_name}
-#SBATCH --nodes 1
-#SBATCH --ntasks={ntasks}
-#SBATCH --time=10:00:00
-#SBATCH --output={log_path}
-
+SHELLSCRIPT = """
+{init_env}
 cd {scone_path}
 python create_heatmaps_job.py --config_path {config_path} --start {start} --end {end}"""
 
@@ -38,20 +29,34 @@ def load_configs(config_path):
     gentype_config = load_config(os.path.join(PARENT_DIR_PATH, "default_gentype_to_typename.yml"))["gentype_to_typename"]
     return config, gentype_config
 
-# count number of objects per sntype
+# get id list for each sntype
 def get_ids_by_sn_name(metadata_paths, sn_type_id_to_name):
-    sntype_to_abundance = {}
+    sntype_to_ids = {}
     for metadata_path in metadata_paths:
         metadata = Table.read(metadata_path, format='fits')
         sntypes = np.unique(metadata['SNTYPE'])
         for sntype in sntypes:
             sn_name = sn_type_id_to_name[sntype]
-            current_value = sntype_to_abundance.get(sn_name, np.array([]))
-            sntype_to_abundance[sn_name] = np.concatenate((current_value, metadata[metadata['SNTYPE'] == sntype]['SNID'].astype(np.int32)))
-    return sntype_to_abundance
+            current_value = sntype_to_ids.get(sn_name, np.array([]))
+            sntype_to_ids[sn_name] = np.concatenate((current_value, metadata[metadata['SNTYPE'] == sntype]['SNID'].astype(np.int32)))
+    return sntype_to_ids
 
+def write_ids_to_use(ids_list_per_type, fraction_to_use, num_per_type, ids_path):
+    chosen_ids = []
+    for ids_list in ids_list_per_type:
+        num_per_type = int(num_per_type*fraction_to_use if num_per_type else len(ids_list)*fraction_to_use)
+        chosen_ids = np.concatenate((chosen_ids, np.random.choice(ids_list, num_per_type, replace=False)))
+        print(f"writing {num_per_type} ids out of {len(ids_list)} for this type")
+
+    print(f"writing {len(chosen_ids)} ids for {len(ids_list_per_type)} types to {ids_path}")
+    f = h5py.File(ids_path, "w")
+    f.create_dataset("ids", data=chosen_ids, dtype=np.int32)
+    f.close()
+    
 # do class balancing
-def class_balance(categorical, abundances, max_per_type, ids_by_sn_name, ids_path):
+def class_balance(categorical, max_per_type, ids_by_sn_name):
+    abundances = {k:len(v) for k, v in ids_by_sn_name.items()}
+
     if categorical: 
         num_to_choose = min(abundances.values())
         ids_to_choose_from = list(ids_by_sn_name.values())
@@ -63,17 +68,7 @@ def class_balance(categorical, abundances, max_per_type, ids_by_sn_name, ids_pat
         Ia_ids = ids_by_sn_name["SNIa"]
         non_Ia_ids = [id_ for sntype, ids in ids_by_sn_name.items() for id_ in ids if sntype != "SNIa"]
         ids_to_choose_from = [non_Ia_ids, Ia_ids]
-    num_to_choose = min(num_to_choose, max_per_type)
-
-    chosen_ids = []
-    for ids_list in ids_to_choose_from:
-        chosen_ids = np.concatenate((np.random.choice(ids_list, num_to_choose, replace=False), chosen_ids))
-    assert len(chosen_ids) == len(np.unique(chosen_ids))
-
-    print(f"writing {len(chosen_ids)} ids ({len(ids_to_choose_from)} types, {num_to_choose} of each) to {ids_path}")
-    f = h5py.File(ids_path, "w")
-    f.create_dataset("ids", data=chosen_ids, dtype=np.int32)
-    f.close()
+    return min(num_to_choose, max_per_type)
 
 # autogenerate some parts of config
 def autofill_scone_config(config):
@@ -85,18 +80,19 @@ def autofill_scone_config(config):
     config["sn_type_id_to_name"] = sn_type_id_to_name
 
     ids_by_sn_name = get_ids_by_sn_name(config["metadata_paths"], sn_type_id_to_name)
-    abundances = {k:len(v) for k, v in ids_by_sn_name.items()}
-    print(f"sn abundances by type: {abundances}")
-    config['types'] = list(abundances.keys())
+    print(f"sn abundances by type: {[[k,len(v)] for k, v in ids_by_sn_name.items()]}")
+    config['types'] = list(ids_by_sn_name.keys())
 
+    fraction_to_use = 1. / config.get("sim_fraction", 1)
     class_balanced = config.get("class_balanced", False)
     categorical = config.get("categorical", False)
     max_per_type = config.get("max_per_type", 100_000_000)
 
     print(f"class balancing {'not' if not class_balanced else ''} applied for {'categorical' if categorical else 'binary'} classification, check 'class_balanced' key if this is not desired")
-    if class_balanced: # then write IDs file
+    if fraction_to_use < 1 or class_balanced: # then write IDs file
         ids_path = f"{config['heatmaps_path']}/ids.hdf5"
-        class_balance(categorical, abundances, max_per_type, ids_by_sn_name, ids_path)
+        num_per_type = class_balance(categorical, max_per_type, ids_by_sn_name) if class_balanced else None
+        write_ids_to_use(ids_by_sn_name.values(), fraction_to_use, num_per_type, ids_path)
         config["ids_path"] = ids_path
 
     return config
@@ -106,25 +102,27 @@ def format_sbatch_file(idx):
     end = min(NUM_PATHS, (idx+1)*NUM_SIMULTANEOUS_JOBS)
     ntasks = end - start
 
-    sbatch_setup_dict = {
+    shellscript_dict = {
+        "init_env": SCONE_CONFIG["init_env"],
         "scone_path": SCONE_PATH,
         "config_path": ARGS.config_path,
-        "log_path": LOG_PATH,
-        "job_name": JOB_NAME.format(**{"index": idx}),
-        "qos": "regular" if ntasks >= MAX_FOR_SHARED_QUEUE else "shared",
-        "ntasks": ntasks,
-        "index": idx,
         "start": start,
         "end": end
     }
-    sbatch_setup = SBATCH_HEADER.format(**sbatch_setup_dict)
-    sbatch_file = SBATCH_FILE.format(**{"index": j})
-    with open(sbatch_file, "w+") as f:
-        f.write(sbatch_setup)
+
+    with open(SCONE_CONFIG['sbatch_header_path'], "r") as f:
+      sbatch_script = f.read().split("\n")
+    sbatch_script = [line for line in sbatch_script if "job-name" not in line] # need to override job name, may as well append it as a new line
+    sbatch_script.append(f"#SBATCH --job-name={JOB_NAME.format(**{'index': idx})}")
+    sbatch_script.append(SHELLSCRIPT.format(**shellscript_dict))
+
+    sbatch_file_path = SBATCH_FILE.format(**{"index": idx})
+    with open(sbatch_file_path , "w+") as f:
+        f.write('\n'.join(sbatch_script))
     print("start: {}, end: {}".format(start, end))
     print(f"launching job {idx} from {start} to {end}")
 
-    return sbatch_file
+    return sbatch_file_path
 
 # START MAIN FUNCTION
 if __name__ == "__main__":
@@ -147,12 +145,9 @@ if __name__ == "__main__":
     NUM_PATHS = len(SCONE_CONFIG["lcdata_paths"])
     NUM_SIMULTANEOUS_JOBS = 32 # haswell has 32 physical cores
     MAX_FOR_SHARED_QUEUE = NUM_SIMULTANEOUS_JOBS / 2 # can only request up to half a node in shared queue
-    LOG_PATH = os.path.join(OUTPUT_DIR, f"CREATE_HEATMAPS__{os.path.basename(ARGS.config_path)}.log")
 
     print(f"num simultaneous jobs: {NUM_SIMULTANEOUS_JOBS}")
     print(f"num paths: {NUM_PATHS}")
-    print(f"logging to {LOG_PATH}")
-
 
     for j in range(int(NUM_PATHS/NUM_SIMULTANEOUS_JOBS)+1):
         sbatch_file = format_sbatch_file(j)

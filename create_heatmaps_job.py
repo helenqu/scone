@@ -35,19 +35,15 @@ for i, proc in enumerate(procs):
     if proc.exitcode != 0:
         failed_procs.append(i)
 
-# if len(failed_procs) == 0:
-#     donefile_info = "SUCCESS"
-if len(failed_procs) > 0:
-    donefile_info = "CREATE HEATMAPS FAILURE\nindices of failed create heatmaps jobs: {}\ncheck out the LC data files or metadata files at those indices in the config yml at {}\nlogs located at create_heatmaps_i.log, i=failed index".format(failed_procs, args.config_path)
-    donefile_path = config.get("donefile", os.path.join(config["heatmaps_path"], "done.txt"))
-    
-    if not os.path.exists(config["heatmaps_path"]):
-        os.makedirs(config["heatmaps_path"])
-    with open(donefile_path, "w+") as donefile:
-        donefile.write(donefile_info)
-   
-   exit_code = 1
+if len(failed_procs) == 0:
+    donefile_info = "CREATE HEATMAPS SUCCESS"
 else:
-   exit_code = 0
+    logfile_path = config.get("heatmaps_logfile", os.path.join(config["heatmaps_path"], f"create_heatmaps__{os.path.basename(args.config_path).split('.')[0]}.log")
+    with open(logfile_path, "a+") as logfile:
+        logfile.write("\nindices of failed create heatmaps jobs: {failed_procs}\ncheck out the LC data files or metadata files at those indices in the config yml at {args.config_path}\nsee above for logs")
 
-sys.exit(exit_code)
+    donefile_info = f"CREATE HEATMAPS FAILURE"
+
+donefile_path = config.get("heatmaps_donefile", os.path.join(config["heatmaps_path"], "done.txt"))
+with open(donefile_path, "w+") as donefile:
+    donefile.write(donefile_info)

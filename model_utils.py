@@ -84,7 +84,7 @@ class SconeClassifier():
             test_acc = self.test()
             history["test_accuracy"] = test_acc
 
-        _print_report_and_save_history(history, start, self.heatmaps_path)
+        self._print_report_and_save_history(history, start, self.heatmaps_path)
 
     # train the model, returns trained model & training log
     # requires:
