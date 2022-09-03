@@ -38,7 +38,7 @@ for i, proc in enumerate(procs):
 if len(failed_procs) == 0:
     donefile_info = "CREATE HEATMAPS SUCCESS"
 else:
-    logfile_path = config.get("heatmaps_logfile", os.path.join(config["heatmaps_path"], f"create_heatmaps__{os.path.basename(args.config_path).split('.')[0]}.log")
+    logfile_path = config.get("heatmaps_logfile", os.path.join(config["heatmaps_path"], f"create_heatmaps__{os.path.basename(args.config_path).split('.')[0]}.log"))
     with open(logfile_path, "a+") as logfile:
         logfile.write("\nindices of failed create heatmaps jobs: {failed_procs}\ncheck out the LC data files or metadata files at those indices in the config yml at {args.config_path}\nsee above for logs")
 

@@ -21,6 +21,7 @@ class SconeClassifier():
             return {}
 
     def __init__(self, config):
+        self.output_path = config['output_path']
         self.heatmaps_path = config['heatmaps_path']
         self.mode = config["mode"]
         
@@ -41,23 +42,21 @@ class SconeClassifier():
             # ids_file.close()
             # self.num_types = len(np.unique(types))
         self.num_types = len(self.types) if self.categorical else 2
+        self.external_trained_model = config.get('trained_model')
         self.train_proportion = config.get('train_proportion', 0.8)
-        self.has_ids = config.get('has_ids', False)
         self.with_z = config.get('with_z', False)
-        self.predict = True if self.mode == "predict" else False
-        self.external_trained_model = config.get("trained_model")
         self.abundances = None
         self.train_set = self.val_set = self.test_set = None
         self.class_balanced = config.get('class_balanced', True)
-        
+
     @staticmethod
     def _print_report_and_save_history(history, start_time, path):
         print("######## CLASSIFICATION REPORT ########")
+        print("classification finished in {:.2f}min".format((time.time() - start_time) / 60))
         if "accuracy" in history:
-            print("classification finished in {:.2f}min".format((time.time() - start_time) / 60))
             print("last training accuracy value: {}".format(history["accuracy"][-1]))
-            print("last validation accuracy value: {}".format(history["val_accuracy"][-1]))
         if "test_accuracy" in history:
+            print("last validation accuracy value: {}".format(history["val_accuracy"][-1]))
             print("test accuracy value: {}".format(history["test_accuracy"]))
 
         with open(os.path.join(path, "history.json"), 'w') as outfile:
@@ -65,26 +64,25 @@ class SconeClassifier():
 
     def run(self):
         start = time.time()
-
-        self.train_set, self.val_set, self.test_set = self._split_and_retrieve_data()
+        self.trained_model = None
 
         if self.external_trained_model:
             print(f"loading trained model found at {self.external_trained_model}")
             self.trained_model = models.load_model(self.external_trained_model, custom_objects={"Reshape": self.Reshape})
 
         if self.mode == "train":
+            self.train_set, self.val_set, self.test_set = self._split_and_retrieve_data()
             self.trained_model, history = self.train()
             history = history.history
+        else: # mode == predict
+            dataset, size = self._retrieve_data(self._load_dataset())
+            print(f"running prediction on full dataset of {size} examples")
+            preds_dict, acc = self.predict(dataset)
+            pd.DataFrame(preds_dict).to_csv(os.path.join(self.output_path, "predictions.csv"), index=False)
 
-        if self.predict:
-            print("running prediction on test set")
-            preds_dict = self.predict(self.test_set)
-            pd.DataFrame(preds_dict).to_csv(os.path.join(self.heatmaps_path, "preds.csv"), index=False)
+            history = {"accuracy": [acc]}
 
-            test_acc = self.test()
-            history["test_accuracy"] = test_acc
-
-        self._print_report_and_save_history(history, start, self.heatmaps_path)
+        self._print_report_and_save_history(history, start, self.output_path)
 
     # train the model, returns trained model & training log
     # requires:
@@ -113,7 +111,7 @@ class SconeClassifier():
             verbose=1,
             class_weight=class_weights if not self.class_balanced else None)
 
-        model.save(f"{self.heatmaps_path}/trained_model")
+        model.save(f"{self.output_path}/trained_model")
         return model, history
 
     def predict(self, dataset, dataset_ids=None):
@@ -132,15 +130,16 @@ class SconeClassifier():
 
         true_labels = dataset.map(lambda _, label, *args: label["label"])
         df_dict = {'pred_labels': predictions, 'true_labels': list(true_labels.as_numpy_iterator())}
-        if self.has_ids:
-            ids = dataset.map(lambda _, label, id_: id_["id"])
-            df_dict['snid'] = list(ids.as_numpy_iterator())
-        # if dataset_ids is not None:
-        #     df_dict['snid'] = dataset_ids
-        return df_dict
+        ids = dataset.map(lambda _, label, id_: id_["id"])
+        df_dict['snid'] = list(ids.as_numpy_iterator())
+
+        prediction_ints = np.round(predictions)
+        acc = float(np.count_nonzero((prediction_ints - list(true_labels.as_numpy_iterator())) == 0)) / len(prediction_ints)
+
+        return df_dict, acc
 
     def test(self, test_set=None):
-        if not self.predict:
+        if not self.mode == "predict":
             raise RuntimeError('no testing in train mode')
         if not self.trained_model:
             raise RuntimeError('model has not been trained! call `train` on the SconeClassifier instance before test!')
@@ -219,14 +218,15 @@ class SconeClassifier():
 
     def _retrieve_data(self, raw_dataset):
         dataset_size = sum([1 for _ in raw_dataset])
-        dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.has_ids, self.with_z), num_parallel_calls=40)
+        dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.with_z), num_parallel_calls=40)
         # self.types = [0,1] if not self.categorical else range(0, self.num_types)
 
         return dataset.apply(tf.data.experimental.ignore_errors()), dataset_size
 
-    # simpler split and retrieve function
-    # - doesn't explicitly split by type (i.e. works better for already class-balanced data)
-    # - doesn't do class balancing
+    # TODO: only class balance when desired, only split when desired
+    # simpler split and retrieve function using tf dataset filter
+    # - always class balances with min(abundances)
+    # - splits into train, val, test sets
     def _split_and_retrieve_data(self):
         dataset, size = self._retrieve_data(self._load_dataset())
         dataset = dataset.shuffle(size)
@@ -248,13 +248,12 @@ class SconeClassifier():
 
             if i == 0:
                 train_set = curr_train_set
-                val_set = curr_val_set if self.predict else curr_val_test_set
+                val_set = curr_val_set if self.mode == "predict" else curr_val_test_set
                 test_set = curr_test_set
             else:
                 train_set = train_set.concatenate(curr_train_set)
-                val_set = val_set.concatenate(curr_val_set) if self.predict else val_set.concatenate(curr_val_test_set)
+                val_set = val_set.concatenate(curr_val_set) if self.mode == "predict" else val_set.concatenate(curr_val_test_set)
                 test_set = test_set.concatenate(curr_test_set)
-
 
         # train_set = dataset.take(train_set_size)
         unique, counts = np.unique(list(train_set.map(lambda image, label, *_: label["label"]).as_numpy_iterator()), return_counts=True)
@@ -277,20 +276,17 @@ class SconeClassifier():
     def _split_and_retrieve_data_stratified(self):
         dataset, size = self._retrieve_data(self._load_dataset())
 
-        train_set, val_set, test_set, self.abundances = stratified_split(dataset, self.train_proportion, self.types, self.predict, self.class_balanced)
+        train_set, val_set, test_set, self.abundances = stratified_split(dataset, self.train_proportion, self.types, self.mode == "predict", self.class_balanced)
 
         train_set = train_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         val_set = val_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
-        test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if self.predict else None
+        test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if self.mode == "predict" else None
 
-        if self.has_ids:
-            # TODO: maybe don't actually extract the ids - too time-consuming, not that useful
-            return extract_ids_and_batch(train_set, val_set, test_set, self.batch_size)
-        else:
-            train_set = train_set.batch(self.batch_size)
-            val_set = val_set.batch(self.batch_size)
-            test_set = test_set.batch(self.batch_size)
-            return train_set, val_set, test_set
+        train_set = train_set.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
+        val_set = val_set.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
+        test_set = test_set.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
+
+        return train_set, val_set, test_set
 
 
 class SconeClassifierIaModels(SconeClassifier):
@@ -325,7 +321,7 @@ class SconeClassifierIaModels(SconeClassifier):
                 Ia_dataset = Ia_dataset.take(20_000)
                 raw_dataset = Ia_dataset.concatenate(self.non_Ia_dataset)
 
-                dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.categorical, self.has_ids), num_parallel_calls=tf.data.experimental.AUTOTUNE)
+                dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape), num_parallel_calls=tf.data.experimental.AUTOTUNE)
                 dataset = dataset.apply(tf.data.experimental.ignore_errors())
                 dataset = dataset.shuffle(20000).cache()
                 ood_ids, dataset = extract_ids_from_dataset(dataset)
@@ -346,13 +342,10 @@ class SconeClassifierIaModels(SconeClassifier):
         val_set = val_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if self.predict else None
 
-        if self.has_ids:
-            return extract_ids_and_batch(train_set, val_set, test_set, self.batch_size)
-        else:
-            train_set = train_set.batch(self.batch_size)
-            val_set = val_set.batch(self.batch_size)
-            test_set = test_set.batch(self.batch_size)
-            return train_set, val_set, test_set
+        train_set = train_set.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
+        val_set = val_set.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
+        test_set = test_set.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
+        return train_set, val_set, test_set
 
     def _load_dataset_separate_Ia_non(self):
         nonIa_loc = [path for path in self.heatmaps_path if "non" in path][0]

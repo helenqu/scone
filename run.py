@@ -11,8 +11,8 @@ SHELLSCRIPT = """
 cd {scone_path}
 python create_heatmaps_job.py --config_path {config_path} --start {start} --end {end}"""
 
-PARENT_DIR_PATH = os.path.dirname(os.path.abspath(__file__))
-SCONE_PATH = os.path.dirname(PARENT_DIR_PATH) #TODO: this directory structure might change
+SCONE_PATH = os.path.dirname(os.path.abspath(__file__)) #TODO: this directory structure might change
+HEATMAPS_PATH = os.path.join(SCONE_PATH, "create_heatmaps") #TODO: this directory structure might change
 
 # HELPER FUNCTIONS
 def write_config(config, config_path):
@@ -26,7 +26,7 @@ def load_config(config_path):
 
 def load_configs(config_path):
     config = load_config(config_path)
-    gentype_config = load_config(os.path.join(PARENT_DIR_PATH, "default_gentype_to_typename.yml"))["gentype_to_typename"]
+    gentype_config = load_config(os.path.join(HEATMAPS_PATH, "default_gentype_to_typename.yml"))["gentype_to_typename"]
     return config, gentype_config
 
 # get id list for each sntype
@@ -44,9 +44,9 @@ def get_ids_by_sn_name(metadata_paths, sn_type_id_to_name):
 def write_ids_to_use(ids_list_per_type, fraction_to_use, num_per_type, ids_path):
     chosen_ids = []
     for ids_list in ids_list_per_type:
-        num_to_choose = int(num_per_type*fraction_to_use if num_per_type else len(ids_list)*fraction_to_use)
-        chosen_ids = np.concatenate((chosen_ids, np.random.choice(ids_list, num_to_choose, replace=False)))
-        print(f"writing {num_to_choose} ids out of {len(ids_list)} for this type")
+        num_per_type = int(num_per_type*fraction_to_use if num_per_type else len(ids_list)*fraction_to_use)
+        chosen_ids = np.concatenate((chosen_ids, np.random.choice(ids_list, num_per_type, replace=False)))
+        print(f"writing {num_per_type} ids out of {len(ids_list)} for this type")
 
     print(f"writing {len(chosen_ids)} ids for {len(ids_list_per_type)} types to {ids_path}")
     f = h5py.File(ids_path, "w")
@@ -55,17 +55,19 @@ def write_ids_to_use(ids_list_per_type, fraction_to_use, num_per_type, ids_path)
     
 # do class balancing
 def class_balance(categorical, max_per_type, ids_by_sn_name):
-    Ia_string = "Ia" if "Ia" in ids_by_sn_name.keys() else "SNIa"
     abundances = {k:len(v) for k, v in ids_by_sn_name.items()}
 
     if categorical: 
         num_to_choose = min(abundances.values())
+        ids_to_choose_from = list(ids_by_sn_name.values())
     else: 
-        num_Ias = abundances[Ia_string]
+        num_Ias = abundances["SNIa"]
         num_non_Ias = sum(abundances.values()) - num_Ias
         num_to_choose = min(num_Ias, num_non_Ias)
 
-    print(f"after class balancing, choose {min(num_to_choose, max_per_type)} of each type")
+        Ia_ids = ids_by_sn_name["SNIa"]
+        non_Ia_ids = [id_ for sntype, ids in ids_by_sn_name.items() for id_ in ids if sntype != "SNIa"]
+        ids_to_choose_from = [non_Ia_ids, Ia_ids]
     return min(num_to_choose, max_per_type)
 
 # autogenerate some parts of config
@@ -137,17 +139,29 @@ if __name__ == "__main__":
     SCONE_CONFIG = autofill_scone_config(SCONE_CONFIG)
     write_config(SCONE_CONFIG, ARGS.config_path)
 
-    JOB_NAME = f"{SCONE_CONFIG.get('job_base_name', 'scone_create_heatmaps')}" + "__{index}"
-    SBATCH_FILE = os.path.join(OUTPUT_DIR, "create_heatmaps__{index}.sh")
+    model_job_path = SCONE_CONFIG["model_sbatch_job_path"]
+    model_sbatch_cmd = ["sbatch"]
 
-    NUM_PATHS = len(SCONE_CONFIG["lcdata_paths"])
-    NUM_SIMULTANEOUS_JOBS = 32 # haswell has 32 physical cores
-    MAX_FOR_SHARED_QUEUE = NUM_SIMULTANEOUS_JOBS / 2 # can only request up to half a node in shared queue
+    if os.path.exists(SCONE_CONFIG['sbatch_header_path']): # make heatmaps
+      JOB_NAME = f"{SCONE_CONFIG.get('job_base_name', 'scone_create_heatmaps')}" + "__{index}"
+      SBATCH_FILE = os.path.join(OUTPUT_DIR, "create_heatmaps__{index}.sh")
 
-    print(f"num simultaneous jobs: {NUM_SIMULTANEOUS_JOBS}")
-    print(f"num paths: {NUM_PATHS}")
+      NUM_PATHS = len(SCONE_CONFIG["lcdata_paths"])
+      NUM_SIMULTANEOUS_JOBS = 32 # haswell has 32 physical cores
+      MAX_FOR_SHARED_QUEUE = NUM_SIMULTANEOUS_JOBS / 2 # can only request up to half a node in shared queue
 
-    for j in range(int(NUM_PATHS/NUM_SIMULTANEOUS_JOBS)+1):
-        sbatch_file = format_sbatch_file(j)
-        subprocess.run(["sbatch", sbatch_file])
+      print(f"num simultaneous jobs: {NUM_SIMULTANEOUS_JOBS}")
+      print(f"num paths: {NUM_PATHS}")
 
+      jids = []
+      for j in range(int(NUM_PATHS/NUM_SIMULTANEOUS_JOBS)+1):
+          sbatch_file = format_sbatch_file(j)
+          out = subprocess.run(["sbatch", "--parsable", sbatch_file], capture_output=True)
+          jids.append(out.stdout.decode('utf-8').strip())
+
+      print(jids)
+      model_sbatch_cmd.append(f"--dependency=afterok:{':'.join(jids)}")
+
+    model_sbatch_cmd.append(model_job_path)
+    print(model_sbatch_cmd)
+    subprocess.run(model_sbatch_cmd)

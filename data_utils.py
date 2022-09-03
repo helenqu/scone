@@ -7,17 +7,15 @@ import tensorflow as tf
 #   - raw_record
 #   - INPUT_SHAPE
 #   - CATEGORICAL
-def get_images(raw_record, input_shape, has_ids=False, with_z=False):
+def get_images(raw_record, input_shape, with_z=False):
     image_feature_description = {
         'label': tf.io.FixedLenFeature([], tf.int64),
         'image_raw': tf.io.FixedLenFeature([], tf.string),
+        'id': tf.io.FixedLenFeature([], tf.int64)
     }
-    if has_ids: 
-        image_feature_description['id'] = tf.io.FixedLenFeature([], tf.int64)
     if with_z: 
         image_feature_description['z'] = tf.io.FixedLenFeature([], tf.float32)
         image_feature_description['z_err'] = tf.io.FixedLenFeature([], tf.float32)
-
 
     example = tf.io.parse_single_example(raw_record, image_feature_description)
     image = tf.reshape(tf.io.decode_raw(example['image_raw'], tf.float64), input_shape)
@@ -25,11 +23,9 @@ def get_images(raw_record, input_shape, has_ids=False, with_z=False):
 
     # TODO: have to subtract 1 from label to get rid of KN in early classification dataset
     if with_z:
-        output = [{"image": image, "z": example["z"], "z_err": example["z_err"]}, {"label": example['label']}]
+        output = [{"image": image, "z": example["z"], "z_err": example["z_err"]}, {"label": example['label']}, {"id": tf.cast(example['id'], tf.int32)}]
     else:
-        output = [{"image": image}, {"label": example['label']}]
-    if has_ids:
-        output.append({"id": tf.cast(example['id'], tf.int32)})
+        output = [{"image": image}, {"label": example['label']}, {"id": tf.cast(example['id'], tf.int32)}]
     return output
 
 # balances classes, splits dataset into train/validation/test sets
