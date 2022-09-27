@@ -29,6 +29,14 @@ def get_band_to_wave(survey):
             "z": 8590.90,
             "Y": 9710.28
         }
+    if survey == "SDSS":
+        return {
+            "u": 3561.79,
+            "g": 4718.87,
+            "r": 6185.19,
+            "i": 7499.7,
+            "z": 8961.49
+        }
     raise ValueError(f"survey {survey} not registered! contact helenqu@sas.upenn.edu")
 
 def read_fits(fname, sn_type_id_to_name, survey_from_config, drop_separators=False):

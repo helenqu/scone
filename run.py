@@ -56,17 +56,18 @@ def write_ids_to_use(ids_list_per_type, fraction_to_use, num_per_type, ids_path)
 # do class balancing
 def class_balance(categorical, max_per_type, ids_by_sn_name):
     abundances = {k:len(v) for k, v in ids_by_sn_name.items()}
+    Ia_string = "Ia" if "Ia" in abundances else "SNIa"
 
     if categorical: 
         num_to_choose = min(abundances.values())
         ids_to_choose_from = list(ids_by_sn_name.values())
     else: 
-        num_Ias = abundances["SNIa"]
+        num_Ias = abundances[Ia_string]
         num_non_Ias = sum(abundances.values()) - num_Ias
         num_to_choose = min(num_Ias, num_non_Ias)
 
-        Ia_ids = ids_by_sn_name["SNIa"]
-        non_Ia_ids = [id_ for sntype, ids in ids_by_sn_name.items() for id_ in ids if sntype != "SNIa"]
+        Ia_ids = ids_by_sn_name[Ia_string]
+        non_Ia_ids = [id_ for sntype, ids in ids_by_sn_name.items() for id_ in ids if sntype != Ia_string]
         ids_to_choose_from = [non_Ia_ids, Ia_ids]
     return min(num_to_choose, max_per_type)
 
@@ -142,7 +143,8 @@ if __name__ == "__main__":
     model_job_path = SCONE_CONFIG["model_sbatch_job_path"]
     model_sbatch_cmd = ["sbatch"]
 
-    if os.path.exists(SCONE_CONFIG['sbatch_header_path']): # make heatmaps
+    if 'sbatch_header_path' in SCONE_CONFIG and os.path.exists(SCONE_CONFIG.get('sbatch_header_path', "")): # make heatmaps
+      print("sbatch header path found: {SCONE_CONFIG['sbatch_header_path']}, making heatmaps")
       JOB_NAME = f"{SCONE_CONFIG.get('job_base_name', 'scone_create_heatmaps')}" + "__{index}"
       SBATCH_FILE = os.path.join(OUTPUT_DIR, "create_heatmaps__{index}.sh")
 

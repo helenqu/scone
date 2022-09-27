@@ -31,7 +31,7 @@ class CreateHeatmapsBase(abc.ABC):
         self.categorical = config["categorical"]
         self.types = config["types"]
         self.sn_type_id_to_name = config["sn_type_id_to_name"] # SNANA type ID to type name (i.e. 42 -> SNII)
-        self.type_to_int_label = {type: 0 if type != "SNIa" or type != "Ia" else 1 for type in self.types} if not self.categorical else {v:i for i,v in enumerate(sorted(self.types))} # int label for classification
+        self.type_to_int_label = {type: 1 if type == "SNIa" or type == "Ia" else 0 for type in self.types} if not self.categorical else {v:i for i,v in enumerate(sorted(self.types))} # int label for classification
         print(f"type to int label: {self.type_to_int_label}")
 
         # restricting number of heatmaps that are made
