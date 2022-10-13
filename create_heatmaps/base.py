@@ -16,7 +16,7 @@ class CreateHeatmapsBase(abc.ABC):
 
         self.survey = config.get("survey", None)
 
-        # file paths 
+        # file paths
         self.metadata_path = config["metadata_paths"][index]
         self.lcdata_path = config["lcdata_paths"][index]
         self.output_path = config["heatmaps_path"]
@@ -30,8 +30,9 @@ class CreateHeatmapsBase(abc.ABC):
         # heatmap labeling
         self.categorical = config["categorical"]
         self.types = config["types"]
+        print(self.types)
         self.sn_type_id_to_name = config["sn_type_id_to_name"] # SNANA type ID to type name (i.e. 42 -> SNII)
-        self.type_to_int_label = {type: 1 if type == "SNIa" or type == "Ia" else 0 for type in self.types} if not self.categorical else {v:i for i,v in enumerate(sorted(self.types))} # int label for classification
+        self.type_to_int_label = {type_str: 1 if type_str == "SNIa" or type_str == "Ia" else 0 for type_str in self.types} if not self.categorical else {v:i for i,v in enumerate(sorted(self.types))} # int label for classification
         print(f"type to int label: {self.type_to_int_label}")
 
         # restricting number of heatmaps that are made
@@ -47,7 +48,7 @@ class CreateHeatmapsBase(abc.ABC):
             if os.path.basename(self.metadata_path) in finished_filenames:
                 print("file has already been processed, exiting")
                 sys.exit(0)
-        
+
         self.metadata, self.lcdata, survey = read_fits(self.lcdata_path, self.sn_type_id_to_name, self.survey)
         metadata_ids = self.metadata[self.metadata.true_target.isin(self.types)].object_id
 
@@ -79,7 +80,7 @@ class CreateHeatmapsBase(abc.ABC):
     def create_heatmaps(self, output_paths, mjd_minmaxes, fit_on_full_lc=True):
         #TODO: infer this from config file rather than making the subclasses pass it in
         self.fit_on_full_lc = fit_on_full_lc
-            
+
         for output_path, mjd_minmax in zip(output_paths, mjd_minmaxes):
             if not os.path.exists(output_path):
                 os.makedirs(output_path)
@@ -88,7 +89,7 @@ class CreateHeatmapsBase(abc.ABC):
             self.done_by_type = {}
             self.removed_by_type = {}
             self.done_ids = []
-            
+
             timings = []
             start = time.time()
             with tf.io.TFRecordWriter("{}/heatmaps_{}.tfrecord".format(output_path, self.index)) as writer:
@@ -98,14 +99,14 @@ class CreateHeatmapsBase(abc.ABC):
                         if i == 1000:
                             time_to_1000 = time.time() - start
                             print(f"took {time_to_1000} sec for 1000 heatmaps; expected total time: {(len(self.ids_for_current_file)/1000)*time_to_1000} sec")
-                    
+
                     sn_name, *sn_data = self._get_sn_data(sn_id, mjd_minmax)
                     if sn_data[0] is None:
                         self._remove(sn_name)
                         continue
                     sn_metadata, sn_lcdata, mjd_range = sn_data
                     wave = [self.band_to_wave[elem] for elem in sn_lcdata['passband']]
-                
+
                     gp = build_gp(20, sn_lcdata, wave)
                     if gp == None:
                         self._remove(sn_name)
@@ -124,7 +125,7 @@ class CreateHeatmapsBase(abc.ABC):
 
                     z = sn_metadata['true_z'].iloc[0]
                     z_err = sn_metadata['true_z_err'].iloc[0]
-                    
+
                     writer.write(image_example(heatmap.flatten().tobytes(), self.type_to_int_label[sn_name], sn_id, z, z_err))
                     self._done(sn_name, sn_id)
 
@@ -160,14 +161,14 @@ class CreateHeatmapsBase(abc.ABC):
         sn_lcdata = self.lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
 
         expected_filters = list(self.band_to_wave.keys())
-        sn_lcdata = sn_lcdata[np.isin(sn_lcdata['passband'], expected_filters)] 
-        if len(sn_lcdata) == 0: 
-            print("expected filters filtering not working") 
+        sn_lcdata = sn_lcdata[np.isin(sn_lcdata['passband'], expected_filters)]
+        if len(sn_lcdata) == 0:
+            print("expected filters filtering not working")
             return sn_name, None
 
         mjd_range = self._calculate_mjd_range(sn_metadata, sn_lcdata, mjd_minmax, self.has_peakmjd)
         if not mjd_range:
-            print("mjd range is none") 
+            print("mjd range is none")
             return sn_name, None
 
         if not self.fit_on_full_lc:
@@ -197,7 +198,7 @@ class CreateHeatmapsBase(abc.ABC):
         ext = get_extinction(milkyway_ebv, wavelengths)
         ext = np.tile(np.expand_dims(ext, axis=1), len(times))
         time_wavelength_grid = np.transpose([np.tile(times, len(wavelengths)), np.repeat(wavelengths, len(times))])
- 
+
         predictions, prediction_vars = gp(time_wavelength_grid, return_var=True)
         ext_corrected_predictions = np.array(predictions).reshape(32, 180) + ext
         prediction_uncertainties = np.sqrt(prediction_vars).reshape(32, 180)

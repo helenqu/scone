@@ -44,24 +44,24 @@ def get_ids_by_sn_name(metadata_paths, sn_type_id_to_name):
 def write_ids_to_use(ids_list_per_type, fraction_to_use, num_per_type, ids_path):
     chosen_ids = []
     for ids_list in ids_list_per_type:
-        num_per_type = int(num_per_type*fraction_to_use if num_per_type else len(ids_list)*fraction_to_use)
-        chosen_ids = np.concatenate((chosen_ids, np.random.choice(ids_list, num_per_type, replace=False)))
-        print(f"writing {num_per_type} ids out of {len(ids_list)} for this type")
+        num_to_choose = int(num_per_type*fraction_to_use if num_per_type else len(ids_list)*fraction_to_use)
+        chosen_ids = np.concatenate((chosen_ids, np.random.choice(ids_list, num_to_choose, replace=False)))
+        print(f"writing {num_to_choose} ids out of {len(ids_list)} for this type")
 
     print(f"writing {len(chosen_ids)} ids for {len(ids_list_per_type)} types to {ids_path}")
     f = h5py.File(ids_path, "w")
     f.create_dataset("ids", data=chosen_ids, dtype=np.int32)
     f.close()
-    
+
 # do class balancing
 def class_balance(categorical, max_per_type, ids_by_sn_name):
     abundances = {k:len(v) for k, v in ids_by_sn_name.items()}
     Ia_string = "Ia" if "Ia" in abundances else "SNIa"
 
-    if categorical: 
+    if categorical:
         num_to_choose = min(abundances.values())
         ids_to_choose_from = list(ids_by_sn_name.values())
-    else: 
+    else:
         num_Ias = abundances[Ia_string]
         num_non_Ias = sum(abundances.values()) - num_Ias
         num_to_choose = min(num_Ias, num_non_Ias)
@@ -165,5 +165,5 @@ if __name__ == "__main__":
       model_sbatch_cmd.append(f"--dependency=afterok:{':'.join(jids)}")
 
     model_sbatch_cmd.append(model_job_path)
-    print(model_sbatch_cmd)
+    print(f"launching model training job with cmd {model_sbatch_cmd}")
     subprocess.run(model_sbatch_cmd)

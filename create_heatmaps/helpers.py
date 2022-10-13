@@ -37,6 +37,14 @@ def get_band_to_wave(survey):
             "i": 7499.7,
             "z": 8961.49
         }
+    if "PS1" in survey:
+        return {
+            "g": 4866.46,
+            "r": 6214.62,
+            "i": 7544.57,
+            "z": 8679.47,
+            "y": 9633.28
+        }
     raise ValueError(f"survey {survey} not registered! contact helenqu@sas.upenn.edu")
 
 def read_fits(fname, sn_type_id_to_name, survey_from_config, drop_separators=False):
@@ -89,7 +97,7 @@ def read_fits(fname, sn_type_id_to_name, survey_from_config, drop_separators=Fal
     df_header = df_header[["SNID", "SNTYPE", "PEAKMJD", "REDSHIFT_FINAL", "REDSHIFT_FINAL_ERR", "MWEBV"]]
     df_header = df_header.rename(columns={"SNID":"object_id", "SNTYPE": "true_target", "PEAKMJD": "true_peakmjd", "REDSHIFT_FINAL": "true_z", "REDSHIFT_FINAL_ERR": "true_z_err", "MWEBV": "mwebv"})
     df_header.replace({"true_target": sn_type_id_to_name}, inplace=True)
-    
+
     band_colname = "FLT" if "FLT" in lcdata.columns else "BAND" # check for filter column name from different versions of SNANA
     lcdata = lcdata[["SNID", "MJD", band_colname, "FLUXCAL", "FLUXCALERR"]]
     rename_columns = {"SNID":"object_id", "MJD": "mjd", band_colname: "passband", "FLUXCAL": "flux", "FLUXCALERR": "flux_err"}
