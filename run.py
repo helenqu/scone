@@ -56,7 +56,7 @@ def write_ids_to_use(ids_list_per_type, fraction_to_use, num_per_type, ids_path)
 # do class balancing
 def class_balance(categorical, max_per_type, ids_by_sn_name):
     abundances = {k:len(v) for k, v in ids_by_sn_name.items()}
-    Ia_string = "Ia" if "Ia" in abundances else "SNIa"
+    Ia_string = "Ia" if "Ia" in abundances.keys() else "SNIa"
 
     if categorical:
         num_to_choose = min(abundances.values())
@@ -104,7 +104,7 @@ def format_sbatch_file(idx):
     ntasks = end - start
 
     shellscript_dict = {
-        "init_env": SCONE_CONFIG["init_env"],
+        "init_env": SCONE_CONFIG["init_env_heatmaps"],
         "scone_path": SCONE_PATH,
         "config_path": ARGS.config_path,
         "start": start,
@@ -149,14 +149,15 @@ if __name__ == "__main__":
       SBATCH_FILE = os.path.join(OUTPUT_DIR, "create_heatmaps__{index}.sh")
 
       NUM_PATHS = len(SCONE_CONFIG["lcdata_paths"])
-      NUM_SIMULTANEOUS_JOBS = 32 # haswell has 32 physical cores
-      MAX_FOR_SHARED_QUEUE = NUM_SIMULTANEOUS_JOBS / 2 # can only request up to half a node in shared queue
+      MAX_SIMULTANEOUS_JOBS = 32 # haswell has 32 physical cores
+      MAX_FOR_SHARED_QUEUE = MAX_SIMULTANEOUS_JOBS // 2 # can only request up to half a node in shared queue
+      NUM_SIMULTANEOUS_JOBS = MAX_FOR_SHARED_QUEUE
 
       print(f"num simultaneous jobs: {NUM_SIMULTANEOUS_JOBS}")
       print(f"num paths: {NUM_PATHS}")
 
       jids = []
-      for j in range(int(NUM_PATHS/NUM_SIMULTANEOUS_JOBS)+1):
+      for j in range(int(NUM_PATHS/MAX_FOR_SHARED_QUEUE)+1):
           sbatch_file = format_sbatch_file(j)
           out = subprocess.run(["sbatch", "--parsable", sbatch_file], capture_output=True)
           jids.append(out.stdout.decode('utf-8').strip())

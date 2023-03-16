@@ -69,7 +69,7 @@ def read_fits(fname, sn_type_id_to_name, survey_from_config, drop_separators=Fal
     if lcdata['MJD'][-1] == -777.0:
         lcdata.remove_row(-1)
     if lcdata['MJD'][0] == -777.0:
-        lcdata.remove_row(-1)
+        lcdata.remove_row(0)
 
     # load header
     metadata_hdu = fits.open(fname.replace("PHOT", "HEAD"))
