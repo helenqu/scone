@@ -99,8 +99,8 @@ def autofill_scone_config(config):
     return config
 
 def format_sbatch_file(idx):
-    start = idx*NUM_SIMULTANEOUS_JOBS
-    end = min(NUM_PATHS, (idx+1)*NUM_SIMULTANEOUS_JOBS)
+    start = idx*NUM_FILES_PER_JOB
+    end = min(NUM_PATHS, (idx+1)*NUM_FILES_PER_JOB)
     ntasks = end - start
 
     shellscript_dict = {
@@ -149,15 +149,13 @@ if __name__ == "__main__":
       SBATCH_FILE = os.path.join(OUTPUT_DIR, "create_heatmaps__{index}.sh")
 
       NUM_PATHS = len(SCONE_CONFIG["lcdata_paths"])
-      MAX_SIMULTANEOUS_JOBS = 32 # haswell has 32 physical cores
-      MAX_FOR_SHARED_QUEUE = MAX_SIMULTANEOUS_JOBS // 2 # can only request up to half a node in shared queue
-      NUM_SIMULTANEOUS_JOBS = MAX_FOR_SHARED_QUEUE
+      NUM_FILES_PER_JOB= 1 # haswell has 32 physical cores
 
-      print(f"num simultaneous jobs: {NUM_SIMULTANEOUS_JOBS}")
+      print(f"num simultaneous jobs: {NUM_FILES_PER_JOB}")
       print(f"num paths: {NUM_PATHS}")
 
       jids = []
-      for j in range(int(NUM_PATHS/MAX_FOR_SHARED_QUEUE)+1):
+      for j in range(int(NUM_PATHS/NUM_FILES_PER_JOB)+1):
           sbatch_file = format_sbatch_file(j)
           out = subprocess.run(["sbatch", "--parsable", sbatch_file], capture_output=True)
           jids.append(out.stdout.decode('utf-8').strip())

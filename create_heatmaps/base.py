@@ -159,6 +159,9 @@ class CreateHeatmapsBase(abc.ABC):
             return sn_name, None
 
         sn_lcdata = self.lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
+        if sn_lcdata.empty or np.all(sn_lcdata['mjd'] < 0):
+            print("sn lcdata empty")
+            return sn_name, None
 
         expected_filters = list(self.band_to_wave.keys())
         sn_lcdata = sn_lcdata[np.isin(sn_lcdata['passband'], expected_filters)]

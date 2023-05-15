@@ -52,15 +52,15 @@ def write_ids_to_use(ids_list_per_type, fraction_to_use, num_per_type, ids_path)
     f = h5py.File(ids_path, "w")
     f.create_dataset("ids", data=chosen_ids, dtype=np.int32)
     f.close()
-    
+
 # do class balancing
 def class_balance(categorical, max_per_type, ids_by_sn_name):
     Ia_string = "Ia" if "Ia" in ids_by_sn_name.keys() else "SNIa"
     abundances = {k:len(v) for k, v in ids_by_sn_name.items()}
 
-    if categorical: 
+    if categorical:
         num_to_choose = min(abundances.values())
-    else: 
+    else:
         num_Ias = abundances[Ia_string]
         num_non_Ias = sum(abundances.values()) - num_Ias
         num_to_choose = min(num_Ias, num_non_Ias)
@@ -141,7 +141,7 @@ if __name__ == "__main__":
     SBATCH_FILE = os.path.join(OUTPUT_DIR, "create_heatmaps__{index}.sh")
 
     NUM_PATHS = len(SCONE_CONFIG["lcdata_paths"])
-    NUM_SIMULTANEOUS_JOBS = 32 # haswell has 32 physical cores
+    NUM_SIMULTANEOUS_JOBS = 1 # haswell has 32 physical cores
     MAX_FOR_SHARED_QUEUE = NUM_SIMULTANEOUS_JOBS / 2 # can only request up to half a node in shared queue
 
     print(f"num simultaneous jobs: {NUM_SIMULTANEOUS_JOBS}")
