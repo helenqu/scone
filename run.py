@@ -74,8 +74,8 @@ def class_balance(categorical, max_per_type, ids_by_sn_name):
 # autogenerate some parts of config
 def autofill_scone_config(config):
     if "input_path" in config and 'metadata_paths' not in config: # write contents of input_path
-        config['metadata_paths'] = [f.path for f in os.scandir(config["input_path"]) if "HEAD" in f.name]
-        config['lcdata_paths'] = [path.replace("HEAD", "PHOT") for path in config['metadata_paths']]
+        config['metadata_paths'] = [f.path for f in os.scandir(config["input_path"]) if "HEAD.FITS" in f.name]
+        config['lcdata_paths'] = [path.replace("HEAD.FITS", "PHOT.FITS") for path in config['metadata_paths']]
 
     sn_type_id_to_name = config.get("sn_type_id_to_name", GENTYPE_CONFIG)
     config["sn_type_id_to_name"] = sn_type_id_to_name
