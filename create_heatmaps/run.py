@@ -141,8 +141,7 @@ if __name__ == "__main__":
     SBATCH_FILE = os.path.join(OUTPUT_DIR, "create_heatmaps__{index}.sh")
 
     NUM_PATHS = len(SCONE_CONFIG["lcdata_paths"])
-    NUM_SIMULTANEOUS_JOBS = 1 # haswell has 32 physical cores
-    MAX_FOR_SHARED_QUEUE = NUM_SIMULTANEOUS_JOBS / 2 # can only request up to half a node in shared queue
+    NUM_SIMULTANEOUS_JOBS = 2 # haswell has 32 physical cores
 
     print(f"num simultaneous jobs: {NUM_SIMULTANEOUS_JOBS}")
     print(f"num paths: {NUM_PATHS}")

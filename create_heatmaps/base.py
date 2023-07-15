@@ -133,7 +133,8 @@ class CreateHeatmapsBase(abc.ABC):
                 pd.DataFrame({"filenames": [os.path.basename(self.metadata_path)]}).to_csv(self.finished_filenames_path, index=False)
             else:
                 finished_filenames = pd.read_csv(self.finished_filenames_path)
-                finished_filenames.append({"filenames": os.path.basename(self.metadata_path)}, ignore_index=True).to_csv(self.finished_filenames_path, index=False)
+                finished_filenames = pd.concat([finished_filenames, pd.DataFrame({"filenames": os.path.basename(self.metadata_path)})
+                finished_filenames.to_csv(self.finished_filenames_path, index=False)
 
             with open("{}/done.log".format(output_path), "a+") as f:
                 f.write("####### JOB {} REPORT #######\n".format(self.index))
@@ -159,7 +160,7 @@ class CreateHeatmapsBase(abc.ABC):
             return sn_name, None
 
         sn_lcdata = self.lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
-        if sn_lcdata.empty or np.all(sn_lcdata['mjd'] < 0):
+        if len(sn_lcdata) == 0 or np.all(sn_lcdata['mjd'] < 0):
             print("sn lcdata empty")
             return sn_name, None
 

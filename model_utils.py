@@ -22,9 +22,9 @@ class SconeClassifier():
 
     def __init__(self, config):
         self.output_path = config['output_path']
-        self.heatmaps_path = config['heatmaps_path']
+        self.heatmaps_paths = config['heatmaps_paths'] if 'heatmaps_paths' in config else config['heatmaps_path'] # #TODO(6/21/23): eventually remove, for backwards compatibility
         self.mode = config["mode"]
-        
+
         self.strategy = tf.distribute.MirroredStrategy()
         self.batch_size_per_replica = config.get('batch_size', 32)
         self.batch_size = self.batch_size_per_replica * self.strategy.num_replicas_in_sync
@@ -120,7 +120,7 @@ class SconeClassifier():
 
         if not self.trained_model:
             raise RuntimeError('model has not been trained! call `train` on the SconeClassifier instance before predict!')
-        
+
         dataset = dataset.cache() # otherwise the rest of the dataset operations won't return entries in the same order
         dataset_no_ids = dataset.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
         predictions = self.trained_model.predict(dataset_no_ids, verbose=0)
@@ -161,7 +161,7 @@ class SconeClassifier():
         z_input = tf.keras.Input(shape=(1,), name="z")
         z_err_input = tf.keras.Input(shape=(1,), name="z_err")
         inputs = [image_input] if not self.with_z else [image_input, z_input, z_err_input]
-        
+
         x = layers.ZeroPadding2D(padding=(0,1))(image_input)
         x = layers.Conv2D(y, (y, 3), activation='elu')(x)
         x = self.Reshape()(x)
@@ -172,7 +172,7 @@ class SconeClassifier():
         x = layers.BatchNormalization()(x)
 
         x = layers.MaxPooling2D((2, 2))(x)
-       
+
         x = layers.ZeroPadding2D(padding=(0,1))(x)
         x = layers.Conv2D(int(y/2), (int(y/2), 3), activation='elu')(x)
         x = self.Reshape()(x)
@@ -195,7 +195,7 @@ class SconeClassifier():
             sn_type_pred = layers.Dense(self.num_types, activation='softmax', name="label")(x)
         else:
             sn_type_pred = layers.Dense(1, activation='sigmoid', name="label")(x)
-        
+
         model = models.Model(inputs=inputs, outputs=[sn_type_pred])
         opt = optimizers.Adam(learning_rate=5e-5)
         loss = 'sparse_categorical_crossentropy' if self.categorical else 'binary_crossentropy'
@@ -207,7 +207,10 @@ class SconeClassifier():
         return model
 
     def _load_dataset(self):
-        filenames = ["{}/{}".format(self.heatmaps_path, f.name) for f in os.scandir(self.heatmaps_path) if "tfrecord" in f.name]
+        if type(self.heatmaps_paths == list):
+            filenames = ["{}/{}".format(heatmaps_path, f.name) for heatmaps_path in self.heatmaps_paths for f in os.scandir(heatmaps_path) if "tfrecord" in f.name]
+        else:
+            filenames = ["{}/{}".format(self.heatmaps_paths, f.name) for f in os.scandir(self.heatmaps_paths) if "tfrecord" in f.name]
         np.random.shuffle(filenames)
         print(len(filenames))
         raw_dataset = tf.data.TFRecordDataset(
@@ -356,7 +359,7 @@ class SconeClassifierIaModels(SconeClassifier):
 	    num_parallel_reads=80)
         non_Ia_dataset = tf.data.TFRecordDataset(
             ["{}/{}".format(nonIa_loc, f.name) for f in os.scandir(nonIa_loc) if "tfrecord" in f.name],
-            num_parallel_reads=80) 
+            num_parallel_reads=80)
 
         Ia_dataset = Ia_dataset.shuffle(100_000)
         non_Ia_dataset = non_Ia_dataset.shuffle(100_000)

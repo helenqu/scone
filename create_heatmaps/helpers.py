@@ -72,10 +72,10 @@ def read_fits(fname, sn_type_id_to_name, survey_from_config, drop_separators=Fal
         lcdata.remove_row(0)
 
     # load header
-    metadata_hdu = fits.open(fname.replace("PHOT", "HEAD"))
+    metadata_hdu = fits.open(fname.replace("PHOT.FITS", "HEAD.FITS"))
     survey = survey_from_config if survey_from_config else metadata_hdu[0].header["SURVEY"]
 
-    header = Table.read(fname.replace("PHOT", "HEAD"), format="fits")
+    header = Table.read(fname.replace("PHOT.FITS", "HEAD.FITS"), format="fits")
     df_header = header.to_pandas()
     df_header["SNID"] = df_header["SNID"].astype(np.int32)
 
