@@ -58,18 +58,18 @@ def class_balance(categorical, max_per_type, ids_by_sn_name):
     abundances = {k:len(v) for k, v in ids_by_sn_name.items()}
     Ia_string = "Ia" if "Ia" in abundances.keys() else "SNIa"
 
-    if categorical:
-        num_to_choose = min(abundances.values())
-        ids_to_choose_from = list(ids_by_sn_name.values())
-    else:
-        num_Ias = abundances[Ia_string]
-        num_non_Ias = sum(abundances.values()) - num_Ias
-        num_to_choose = min(num_Ias, num_non_Ias)
+    # if categorical:
+    #     num_to_choose = min(abundances.values())
+    #     ids_to_choose_from = list(ids_by_sn_name.values())
+    # else:
+    #     num_Ias = abundances[Ia_string]
+    #     num_non_Ias = sum(abundances.values()) - num_Ias
+    #     num_to_choose = min(num_Ias, num_non_Ias)
 
-        Ia_ids = ids_by_sn_name[Ia_string]
-        non_Ia_ids = [id_ for sntype, ids in ids_by_sn_name.items() for id_ in ids if sntype != Ia_string]
-        ids_to_choose_from = [non_Ia_ids, Ia_ids]
-    return min(num_to_choose, max_per_type)
+    #     Ia_ids = ids_by_sn_name[Ia_string]
+    #     non_Ia_ids = [id_ for sntype, ids in ids_by_sn_name.items() for id_ in ids if sntype != Ia_string]
+    #     ids_to_choose_from = [non_Ia_ids, Ia_ids]
+    return min(min(abundances.values()), max_per_type)
 
 # autogenerate some parts of config
 def autofill_scone_config(config):

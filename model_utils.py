@@ -207,7 +207,7 @@ class SconeClassifier():
         return model
 
     def _load_dataset(self):
-        if type(self.heatmaps_paths == list):
+        if type(self.heatmaps_paths) == list:
             filenames = ["{}/{}".format(heatmaps_path, f.name) for heatmaps_path in self.heatmaps_paths for f in os.scandir(heatmaps_path) if "tfrecord" in f.name]
         else:
             filenames = ["{}/{}".format(self.heatmaps_paths, f.name) for f in os.scandir(self.heatmaps_paths) if "tfrecord" in f.name]
@@ -369,7 +369,7 @@ class SconeClassifierIaModels(SconeClassifier):
 if __name__ == "__main__":
     def load_config(config_path):
         with open(config_path, "r") as cfgfile:
-            config = yaml.load(cfgfile)
+            config = yaml.safe_load(cfgfile)
         return config
 
     parser = argparse.ArgumentParser(description='set up the SCONE model')

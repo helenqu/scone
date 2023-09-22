@@ -133,7 +133,7 @@ class CreateHeatmapsBase(abc.ABC):
                 pd.DataFrame({"filenames": [os.path.basename(self.metadata_path)]}).to_csv(self.finished_filenames_path, index=False)
             else:
                 finished_filenames = pd.read_csv(self.finished_filenames_path)
-                finished_filenames = pd.concat([finished_filenames, pd.DataFrame({"filenames": os.path.basename(self.metadata_path)})
+                finished_filenames = pd.concat([finished_filenames, pd.DataFrame({"filenames": [os.path.basename(self.metadata_path)]})])
                 finished_filenames.to_csv(self.finished_filenames_path, index=False)
 
             with open("{}/done.log".format(output_path), "a+") as f:
