@@ -129,6 +129,8 @@ class CreateHeatmapsBase(abc.ABC):
                     writer.write(image_example(heatmap.flatten().tobytes(), self.type_to_int_label[sn_name], sn_id, z, z_err))
                     self._done(sn_name, sn_id)
 
+            print(f"job {self.index}: Processed {i} SNe")
+
             if not os.path.exists(self.finished_filenames_path):
                 pd.DataFrame({"filenames": [os.path.basename(self.metadata_path)]}).to_csv(self.finished_filenames_path, index=False)
             else:

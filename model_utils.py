@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import os
 import numpy as np
 import pandas as pd
@@ -21,6 +23,8 @@ class SconeClassifier():
             return {}
 
     def __init__(self, config):
+        self.seed = config.get("seed", 42)
+
         self.output_path = config['output_path']
         self.heatmaps_paths = config['heatmaps_paths'] if 'heatmaps_paths' in config else config['heatmaps_path'] # #TODO(6/21/23): eventually remove, for backwards compatibility
         self.mode = config["mode"]
@@ -54,7 +58,7 @@ class SconeClassifier():
         print("######## CLASSIFICATION REPORT ########")
         print("classification finished in {:.2f}min".format((time.time() - start_time) / 60))
         if "accuracy" in history:
-            print("last training accuracy value: {}".format(history["accuracy"][-1]))
+            print("last training accuracy value: {}".format(np.round(history["accuracy"][-1], 3)))
         if "test_accuracy" in history:
             print("last validation accuracy value: {}".format(history["val_accuracy"][-1]))
             print("test accuracy value: {}".format(history["test_accuracy"]))
@@ -63,6 +67,8 @@ class SconeClassifier():
             json.dump(history, outfile)
 
     def run(self):
+        tf.random.set_seed(self.seed)
+
         start = time.time()
         self.trained_model = None
 
@@ -82,7 +88,9 @@ class SconeClassifier():
 
             history = {"accuracy": [acc]}
 
+        print("DONE TRAINING, printing report and saving history...")
         self._print_report_and_save_history(history, start, self.output_path)
+        print("DONE")
 
     # train the model, returns trained model & training log
     # requires:
@@ -375,6 +383,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='set up the SCONE model')
     parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/config.yml"')
     args = parser.parse_args()
+    print(f"{os.path.realpath(__file__)} --config_path {args.config_path}")
 
     scone_config = load_config(args.config_path)
     SconeClassifier(scone_config).run()

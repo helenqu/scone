@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import os, sys
 import yaml
 import argparse
@@ -14,6 +16,13 @@ args = parser.parse_args()
 def load_config(config_path):
     with open(config_path, "r") as cfgfile:
         config = yaml.load(cfgfile, Loader=yaml.Loader)
+    # expand env vars
+    config['lcdata_paths'] = [os.path.expandvars(path) for path in config['lcdata_paths']]
+    config['metadata_paths'] = [os.path.expandvars(path) for path in config['metadata_paths']]
+    config['heatmaps_path'] = os.path.expandvars(config['heatmaps_path'])
+    config['output_path'] = os.path.expandvars(config['output_path'])
+    config['trained_model'] = os.path.expandvars(config['trained_model'])
+
     return config
 
 def create_heatmaps(config, index):
