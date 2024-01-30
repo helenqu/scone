@@ -11,7 +11,7 @@ import yaml
 import os
 
 def get_band_to_wave(survey):
-    if survey == 'NGRST' or survey == 'WFIRST':
+    if survey == 'NGRST' or survey == 'ROMAN' or survey == 'WFIRST':
         return {
             "R": 6296.73,
             "Z": 8744.77,
