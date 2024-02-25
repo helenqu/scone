@@ -21,7 +21,7 @@ def load_config(config_path):
     config['metadata_paths'] = [os.path.expandvars(path) for path in config['metadata_paths']]
     config['heatmaps_path'] = os.path.expandvars(config['heatmaps_path'])
     config['output_path'] = os.path.expandvars(config['output_path'])
-    config['trained_model'] = os.path.expandvars(config['trained_model']) if 'trained_model' in config else None
+    config['trained_model'] = os.path.expandvars(str(config['trained_model'])) if 'trained_model' in config and os.path.exists(str(config['trained_model'])) else None
 
     return config
 
