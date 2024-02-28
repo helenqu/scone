@@ -72,8 +72,6 @@ class SconeClassifier():
         start = time.time()
         self.trained_model = None
 
-        print(f"\n xxx self.external_trained_model = {self.external_trained_model} / {self.trained_model}\n")
-
         if self.external_trained_model:
             print(f"loading trained model found at {self.external_trained_model}")
             self.trained_model = models.load_model(self.external_trained_model, custom_objects={"Reshape": self.Reshape})
