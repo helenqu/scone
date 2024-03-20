@@ -1,5 +1,10 @@
 #!/usr/bin/env python
-
+#
+# Mar 6 2024 RK 
+#  +  minor refactor in main to accept optional --heatmaps_subdir argument that
+#     is useful for side-by-side testing of scone codes or options. This code
+#     should still be compatible with both original and refactored scone codes
+#
 import os
 import numpy as np
 import pandas as pd
@@ -11,7 +16,12 @@ import time
 import json
 import argparse
 
-from data_utils import *
+from   data_utils  import *
+from   scone_utils import *   # RK - should merge with data_utils ?
+import scone_utils as util
+
+# =====================================================
+# =====================================================
 
 class SconeClassifier():
     # define my own reshape layer
@@ -32,7 +42,7 @@ class SconeClassifier():
         self.strategy = tf.distribute.MirroredStrategy()
         self.batch_size_per_replica = config.get('batch_size', 32)
         self.batch_size = self.batch_size_per_replica * self.strategy.num_replicas_in_sync
-        print(f"batch size in config: {self.batch_size_per_replica}, num replicas: {self.strategy.num_replicas_in_sync}, true batch size: {self.batch_size}")
+        logging.info(f"batch size in config: {self.batch_size_per_replica}, num replicas: {self.strategy.num_replicas_in_sync}, true batch size: {self.batch_size}")
 
         self.num_epochs = config['num_epochs']
         self.input_shape = (config['num_wavelength_bins'], config['num_mjd_bins'], 2)
@@ -53,27 +63,94 @@ class SconeClassifier():
         self.train_set = self.val_set = self.test_set = None
         self.class_balanced = config.get('class_balanced', True)
 
-    @staticmethod
-    def _print_report_and_save_history(history, start_time, path):
-        print("######## CLASSIFICATION REPORT ########")
-        print("classification finished in {:.2f}min".format((time.time() - start_time) / 60))
-        if "accuracy" in history:
-            print("last training accuracy value: {}".format(np.round(history["accuracy"][-1], 3)))
-        if "test_accuracy" in history:
-            print("last validation accuracy value: {}".format(history["val_accuracy"][-1]))
-            print("test accuracy value: {}".format(history["test_accuracy"]))
+    def write_summary_file(self, history):
 
-        with open(os.path.join(path, "history.json"), 'w') as outfile:
+        # created Mar 2024 by R.Kessler
+        # write YAML formatted summary that can be parsed by downstream
+        # pipeline components.
+
+        summary_file = os.path.join(self.output_path, SCONE_SUMMARY_FILE)
+        logging.info(f"Write formatted summary to {SCONE_SUMMARY_FILE}")
+
+        accuracy_dict = self.get_accuracy_dict(history)
+        t_hr = (time.time() - self.t_start)/3600.0
+
+        with open(summary_file,"wt") as s:
+            s.write(f"PROGRAM_CLASS:  {PROGRAM_CLASS_TRAINING}\n")
+            s.write(f"CPU_SUM:        {t_hr:.2f}  # hr \n")
+
+            s.write(f"ACCURACY:\n")
+            for acc_type, acc_value in accuracy_dict.items():
+                s.write(f"  - {acc_type}:  {acc_value} \n")            
+                
+        # - - - - - - - - - - - - -
+        # append some heatmap info.
+        # scoop up informat from heatmap summary and transfer some of it
+        # to training summary        
+        heatmap_summ_file = os.path.join(self.heatmaps_paths, SCONE_SUMMARY_FILE)
+        if not os.path.exists(heatmap_summ_file): return  # no summary for legacy
+        heatmap_summ_info = util.load_config_expandvars(heatmap_summ_file, [] )
+        heatmap_dict_copy = {}  # init dict to write into train-summary file
+        copy_keys_heatmap = [ 'N_LC', 'INPUT_DATA_DIRS', 'PRESCALE_HEATMAP' ]
+
+        for key in copy_keys_heatmap:
+            tmp_dict = { key : heatmap_summ_info[key] }            
+            heatmap_dict_copy.update(tmp_dict)
+
+        with open(summary_file, 'a+') as s:
+            s.write(f"\n")
+            s.write(f"# info from heatmap creation:\n")
+            s.write(f"HEATMAPS_PATH:  {self.heatmaps_paths}   # input to training\n")
+            yaml.dump(heatmap_dict_copy, s, default_flow_style=False)
+
+        return
+
+    def get_accuracy_dict(self, history):
+        accuracy_dict = {
+            'training'   : None,
+            'validation' : None,
+            'test'       : None
+        }
+
+        if "accuracy" in history:
+            accuracy_dict['training'] = np.round(history["accuracy"][-1], 3)
+
+        if "test_accuracy" in history:
+            accuracy_dict['validation'] = history["val_accuracy"][-1]
+            accuracy_dict['test']       = history["test_accuracy"]
+        
+        return accuracy_dict
+
+    def _print_report_and_save_history(self, history):
+
+        logging.info("######## CLASSIFICATION REPORT ########")
+        
+        t_minutes = (time.time() - self.t_start) / 60.0
+        logging.info(f"classification finished in {t_minutes:.2f} min")
+
+        if "accuracy" in history:
+            tmp_accuracy = np.round(history["accuracy"][-1], 3)
+            logging.info(f"last training accuracy value: {tmp_accuracy}")
+
+        if "test_accuracy" in history:
+            tmp_accuracy = history["val_accuracy"][-1]
+            logging.info(f"last validation accuracy value: {tmp_accuracy}")
+
+            tmp_accuracy = history["test_accuracy"]
+            logging.info(f"test accuracy value: {tmp_accuracy}" )
+
+        history_json_file = os.path.join(self.output_path, "history.json")
+        with open(os.path.join(history_json_file), 'w') as outfile:
             json.dump(history, outfile)
 
     def run(self):
         tf.random.set_seed(self.seed)
 
-        start = time.time()
+        self.t_start = time.time()
         self.trained_model = None
 
         if self.external_trained_model:
-            print(f"loading trained model found at {self.external_trained_model}")
+            logging.info(f"loading trained model found at {self.external_trained_model}")
             self.trained_model = models.load_model(self.external_trained_model, custom_objects={"Reshape": self.Reshape})
 
         if self.mode == "train":
@@ -82,15 +159,16 @@ class SconeClassifier():
             history = history.history
         else: # mode == predict
             dataset, size = self._retrieve_data(self._load_dataset())
-            print(f"running prediction on full dataset of {size} examples")
+            logging.info(f"running prediction on full dataset of {size} examples")
             preds_dict, acc = self.predict(dataset)
             pd.DataFrame(preds_dict).to_csv(os.path.join(self.output_path, "predictions.csv"), index=False)
 
             history = {"accuracy": [acc]}
 
-        print("DONE TRAINING, printing report and saving history...")
-        self._print_report_and_save_history(history, start, self.output_path)
-        print("DONE")
+        logging.info("DONE TRAINING, printing report and saving history...")
+        self._print_report_and_save_history(history)
+        self.write_summary_file(history)
+        logging.info("DONE")
 
     # train the model, returns trained model & training log
     # requires:
@@ -101,17 +179,17 @@ class SconeClassifier():
     def train(self, train_set=None, val_set=None):
         with self.strategy.scope():
             model = self._define_and_compile_model() if not self.external_trained_model else self.trained_model
-            print(model.summary())
+            logging.info(model.summary())
             train_set = train_set if train_set is not None else self.train_set
             val_set = val_set if val_set is not None else self.val_set
 
         if not self.class_balanced:
-            print("not class balanced, applying class weights")
+            logging.info("not class balanced, applying class weights")
             class_weights = {k: (self.batch_size / (self.num_types * v)) for k,v in self.abundances.items()}
 
         train_set = train_set.map(lambda image, label, *args: (image, label)).shuffle(100_000).cache().batch(self.batch_size)
         val_set = val_set.map(lambda image, label, *args: (image, label)).shuffle(10_000).cache().batch(self.batch_size)
-        print("starting to train")
+        logging.info("starting to train")
         history = model.fit(
             train_set,
             epochs=self.num_epochs,
@@ -207,7 +285,7 @@ class SconeClassifier():
         model = models.Model(inputs=inputs, outputs=[sn_type_pred])
         opt = optimizers.Adam(learning_rate=5e-5)
         loss = 'sparse_categorical_crossentropy' if self.categorical else 'binary_crossentropy'
-        print(metrics)
+        logging.info(metrics)
         model.compile(optimizer=opt,
                       loss=loss,
                       metrics=metrics)
@@ -220,7 +298,7 @@ class SconeClassifier():
         else:
             filenames = ["{}/{}".format(self.heatmaps_paths, f.name) for f in os.scandir(self.heatmaps_paths) if "tfrecord" in f.name]
         np.random.shuffle(filenames)
-        print(len(filenames))
+        logging.info(len(filenames))
         raw_dataset = tf.data.TFRecordDataset(
             filenames,
             num_parallel_reads=80)
@@ -243,7 +321,7 @@ class SconeClassifier():
         dataset = dataset.shuffle(size)
 
         unique, counts = np.unique(list(dataset.map(lambda image, label, *_: label["label"]).as_numpy_iterator()), return_counts=True)
-        print(f"dataset abundances: {dict(zip(unique, counts))}")
+        logging.info(f"dataset abundances: {dict(zip(unique, counts))}")
         num_per_type = min(counts)
 
         train_set_size_per_type = int(num_per_type*self.train_proportion)
@@ -268,13 +346,13 @@ class SconeClassifier():
 
         # train_set = dataset.take(train_set_size)
         unique, counts = np.unique(list(train_set.map(lambda image, label, *_: label["label"]).as_numpy_iterator()), return_counts=True)
-        print(f"train set abundances: {dict(zip(unique, counts))}")
+        logging.info(f"train set abundances: {dict(zip(unique, counts))}")
 
         unique, counts = np.unique(list(val_set.map(lambda image, label, *_: label["label"]).as_numpy_iterator()), return_counts=True)
-        print(f"val set abundances: {dict(zip(unique, counts))}")
+        logging.info(f"val set abundances: {dict(zip(unique, counts))}")
 
         unique, counts = np.unique(list(test_set.map(lambda image, label, *_: label["label"]).as_numpy_iterator()), return_counts=True)
-        print(f"test set abundances: {dict(zip(unique, counts))}")
+        logging.info(f"test set abundances: {dict(zip(unique, counts))}")
 
         return train_set, val_set, test_set
 
@@ -374,16 +452,37 @@ class SconeClassifierIaModels(SconeClassifier):
         return Ia_dataset, non_Ia_dataset
 
 
-if __name__ == "__main__":
-    def load_config(config_path):
-        with open(config_path, "r") as cfgfile:
-            config = yaml.safe_load(cfgfile)
-        return config
+def get_args():
 
     parser = argparse.ArgumentParser(description='set up the SCONE model')
-    parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/config.yml"')
-    args = parser.parse_args()
-    print(f"{os.path.realpath(__file__)} --config_path {args.config_path}")
 
-    scone_config = load_config(args.config_path)
+    msg = "config file name"
+    parser.add_argument('--config_path', type=str, help=msg)
+
+    msg = f"alternative heatmaps subdir (default = {HEATMAPS_SUBDIR_DEFAULT})"
+    parser.add_argument('--heatmaps_subdir', type=str, default=HEATMAPS_SUBDIR_DEFAULT,  help=msg)
+
+    args = parser.parse_args()
+    return args
+
+
+# ===============================================
+#   MAIN
+# ===============================================
+if __name__ == "__main__":
+
+    util.setup_logging()
+
+    util.print_job_command()
+
+    args = get_args()
+
+    key_expandvar_list = [ 'output_path' ]
+    scone_config = util.load_config_expandvars(args.config_path, key_expandvar_list )
+
+    # define full path to heatmaps based on subdir
+    scone_config['heatmaps_path'] = os.path.join(scone_config['output_path'],args.heatmaps_subdir)
+
     SconeClassifier(scone_config).run()
+
+    # ==== END MAIN ===

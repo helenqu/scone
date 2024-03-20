@@ -1,4 +1,6 @@
-import os
+#!/usr/bin/env python
+
+import os, sys
 import yaml
 import argparse
 import subprocess
@@ -49,6 +51,8 @@ def write_ids_to_use(ids_list_per_type, fraction_to_use, num_per_type, ids_path)
         print(f"writing {num_to_choose} ids out of {len(ids_list)} for this type")
 
     print(f"writing {len(chosen_ids)} ids for {len(ids_list_per_type)} types to {ids_path}")
+    sys.stdout.flush() 
+
     f = h5py.File(ids_path, "w")
     f.create_dataset("ids", data=chosen_ids, dtype=np.int32)
     f.close()
@@ -90,6 +94,8 @@ def autofill_scone_config(config):
     max_per_type = config.get("max_per_type", 100_000_000)
 
     print(f"class balancing {'not' if not class_balanced else ''} applied for {'categorical' if categorical else 'binary'} classification, check 'class_balanced' key if this is not desired")
+    sys.stdout.flush() 
+
     if fraction_to_use < 1 or class_balanced: # then write IDs file
         ids_path = f"{config['heatmaps_path']}/ids.hdf5"
         num_per_type = class_balance(categorical, max_per_type, ids_by_sn_name) if class_balanced else None
@@ -112,8 +118,20 @@ def format_sbatch_file(idx):
     }
 
     with open(SCONE_CONFIG['sbatch_header_path'], "r") as f:
-      sbatch_script = f.read().split("\n")
-    sbatch_script = [line for line in sbatch_script if "job-name" not in line] # need to override job name, may as well append it as a new line
+      sbatch_script_tmp = f.read().split("\n")
+
+    # Mar 8 2024: RK hack to make unique log file for each create_heatmap
+    sbatch_script = []
+    for line in sbatch_script_tmp:
+        line_out = line
+        if 'job-name' in line: continue
+        if 'output=' in line :
+            suffix   = '_model_config.log'
+            line_out = line.split(suffix)[0] + str(idx) + '_' +  suffix
+        sbatch_script.append(line_out)
+
+    # xxx mark delete by RK sbatch_script=[line for line in sbatch_script if "job-name" not in line] 
+
     sbatch_script.append(f"#SBATCH --job-name={JOB_NAME.format(**{'index': idx})}")
     sbatch_script.append(SHELLSCRIPT.format(**shellscript_dict))
 
@@ -122,11 +140,16 @@ def format_sbatch_file(idx):
         f.write('\n'.join(sbatch_script))
     print("start: {}, end: {}".format(start, end))
     print(f"launching job {idx} from {start} to {end}")
+    sys.stdout.flush() 
 
     return sbatch_file_path
 
 # START MAIN FUNCTION
 if __name__ == "__main__":
+
+    print(f" full command: {' '.join(sys.argv)} \n")
+    sys.stdout.flush() 
+
     parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
     parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
     ARGS = parser.parse_args()
@@ -153,6 +176,7 @@ if __name__ == "__main__":
 
       print(f"num simultaneous jobs: {NUM_FILES_PER_JOB}")
       print(f"num paths: {NUM_PATHS}")
+      sys.stdout.flush() 
 
       jids = []
       for j in range(int(NUM_PATHS/NUM_FILES_PER_JOB)+1):
@@ -161,8 +185,11 @@ if __name__ == "__main__":
           jids.append(out.stdout.decode('utf-8').strip())
 
       print(jids)
+      sys.stdout.flush() 
       model_sbatch_cmd.append(f"--dependency=afterok:{':'.join(jids)}")
 
     model_sbatch_cmd.append(model_job_path)
     print(f"launching model training job with cmd {model_sbatch_cmd}")
+    sys.stdout.flush() 
+
     subprocess.run(model_sbatch_cmd)
