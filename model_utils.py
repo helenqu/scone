@@ -15,6 +15,7 @@ import h5py
 import time
 import json
 import argparse
+import atexit
 
 from   data_utils  import *
 from   scone_utils import *   # RK - should merge with data_utils ?
@@ -33,9 +34,10 @@ class SconeClassifier():
             return {}
 
     def __init__(self, config):
+        self.scone_config = config  
         self.seed = config.get("seed", 42)
 
-        self.output_path = config['output_path']
+        self.output_path    = config['output_path']
         self.heatmaps_paths = config['heatmaps_paths'] if 'heatmaps_paths' in config else config['heatmaps_path'] # #TODO(6/21/23): eventually remove, for backwards compatibility
         self.mode = config["mode"]
 
@@ -46,7 +48,7 @@ class SconeClassifier():
 
         self.num_epochs = config['num_epochs']
         self.input_shape = (config['num_wavelength_bins'], config['num_mjd_bins'], 2)
-        self.categorical = config['categorical']
+        self.categorical = config.setdefault('categorical',False)
         self.types = config.get('types', None)
         if self.categorical and self.types is None:
             raise KeyError('cannot perform categorical classification without knowing the number of source types! please specify the `types` key in your config file to reflect this information')
@@ -56,12 +58,19 @@ class SconeClassifier():
             # ids_file.close()
             # self.num_types = len(np.unique(types))
         self.num_types = len(self.types) if self.categorical else 2
-        self.external_trained_model = config.get('trained_model')
         self.train_proportion = config.get('train_proportion', 0.8)
         self.with_z = config.get('with_z', False)
         self.abundances = None
         self.train_set = self.val_set = self.test_set = None
         self.class_balanced = config.get('class_balanced', True)
+        self.external_trained_model = config.get('trained_model')
+        self.prob_column_name = config.setdefault('prob_column_name', "PROB_SCONE") # RK
+
+        self.LEGACY = 'sim_fraction' in config
+        self.REFAC  = not self.LEGACY
+        logging.info(f"LEGACY code: {self.LEGACY}")
+
+        return
 
     def write_summary_file(self, history):
 
@@ -75,12 +84,21 @@ class SconeClassifier():
         accuracy_dict = self.get_accuracy_dict(history)
         t_hr = (time.time() - self.t_start)/3600.0
 
+        if self.mode == MODE_TRAIN:
+            PROGRAM_CLASS = PROGRAM_CLASS_TRAINING
+        elif self.mode == MODE_PREDICT :
+            PROGRAM_CLASS = PROGRAM_CLASS_PREDICT
+        else:
+            PROGRAM_CLASS = "UNKNOWN"
+
         with open(summary_file,"wt") as s:
-            s.write(f"PROGRAM_CLASS:  {PROGRAM_CLASS_TRAINING}\n")
+            s.write(f"PROGRAM_CLASS:  {PROGRAM_CLASS}\n")
             s.write(f"CPU_SUM:        {t_hr:.2f}  # hr \n")
 
             s.write(f"ACCURACY:\n")
             for acc_type, acc_value in accuracy_dict.items():
+                if isinstance(acc_value,float):
+                    acc_value = f"{acc_value:.4f}"
                 s.write(f"  - {acc_type}:  {acc_value} \n")            
                 
         # - - - - - - - - - - - - -
@@ -91,11 +109,12 @@ class SconeClassifier():
         if not os.path.exists(heatmap_summ_file): return  # no summary for legacy
         heatmap_summ_info = util.load_config_expandvars(heatmap_summ_file, [] )
         heatmap_dict_copy = {}  # init dict to write into train-summary file
-        copy_keys_heatmap = [ 'N_LC', 'INPUT_DATA_DIRS', 'PRESCALE_HEATMAP' ]
+        copy_keys_heatmap = [ 'N_LC', 'INPUT_DATA_DIRS',  'SNID_SELECT_FILES',  'PRESCALE_HEATMAPS' ]
 
         for key in copy_keys_heatmap:
-            tmp_dict = { key : heatmap_summ_info[key] }            
-            heatmap_dict_copy.update(tmp_dict)
+            if key in heatmap_summ_info:
+                tmp_dict = { key : heatmap_summ_info[key] }            
+                heatmap_dict_copy.update(tmp_dict)
 
         with open(summary_file, 'a+') as s:
             s.write(f"\n")
@@ -107,19 +126,45 @@ class SconeClassifier():
 
     def get_accuracy_dict(self, history):
         accuracy_dict = {
-            'training'   : None,
-            'validation' : None,
-            'test'       : None
+            'training'   : None,   # vast majority
+            'validation' : None,   # small subset
+            'test'       : None    # no existing?
         }
 
         if "accuracy" in history:
             accuracy_dict['training'] = np.round(history["accuracy"][-1], 3)
 
-        if "test_accuracy" in history:
+        if "val_accuracy" in history:
             accuracy_dict['validation'] = history["val_accuracy"][-1]
+
+        if "test_accuracy" in history:
             accuracy_dict['test']       = history["test_accuracy"]
         
         return accuracy_dict
+
+    def write_predict_csv_file(self, predict_dict):
+
+        # Created Apr 4 2024 by R.Kessler
+        # write predictions to csv file.
+
+        # create csv file from predictoins
+        predict_file = os.path.join(self.output_path, PREDICT_CSV_FILE_BASE)
+        pd.DataFrame(predict_dict).to_csv(predict_file, index=False) 
+
+        if self.LEGACY : return
+
+        # re-write csv file with snid as first column, and with prob_preds
+        # renamed based on user input key prob_column_name.
+        # The code below was moved from Pippin to here so that scone
+        # controls all output.        
+        predictions = pd.read_csv(predict_file)
+        if "pred_labels" in predictions.columns :
+            predictions = predictions[["snid", "pred_labels"]] # make sure snid is the first col
+            predictions = predictions.rename(columns={"pred_labels": self.prob_column_name })
+            predictions.to_csv(predict_file, index=False)
+            logging.info(f"SCONE prediction file: {predict_file}")            
+
+        return
 
     def _print_report_and_save_history(self, history):
 
@@ -132,10 +177,11 @@ class SconeClassifier():
             tmp_accuracy = np.round(history["accuracy"][-1], 3)
             logging.info(f"last training accuracy value: {tmp_accuracy}")
 
-        if "test_accuracy" in history:
+        if "val_accuracy" in history:
             tmp_accuracy = history["val_accuracy"][-1]
             logging.info(f"last validation accuracy value: {tmp_accuracy}")
 
+        if "test_accuracy" in history:
             tmp_accuracy = history["test_accuracy"]
             logging.info(f"test accuracy value: {tmp_accuracy}" )
 
@@ -153,22 +199,22 @@ class SconeClassifier():
             logging.info(f"loading trained model found at {self.external_trained_model}")
             self.trained_model = models.load_model(self.external_trained_model, custom_objects={"Reshape": self.Reshape})
 
-        if self.mode == "train":
+        if self.mode == MODE_TRAIN:
             self.train_set, self.val_set, self.test_set = self._split_and_retrieve_data()
             self.trained_model, history = self.train()
             history = history.history
-        else: # mode == predict
+        else:         # mode == predict
             dataset, size = self._retrieve_data(self._load_dataset())
-            logging.info(f"running prediction on full dataset of {size} examples")
-            preds_dict, acc = self.predict(dataset)
-            pd.DataFrame(preds_dict).to_csv(os.path.join(self.output_path, "predictions.csv"), index=False)
+            logging.info(f"running scone prediction on full dataset of {size} examples")
+            predict_dict, acc = self.predict(dataset)            
+            self.write_predict_csv_file(predict_dict)
+            history = { "accuracy": [acc] }
 
-            history = {"accuracy": [acc]}
-
-        logging.info("DONE TRAINING, printing report and saving history...")
+        logging.info(f"DONE with scone {self.mode}, print report and save history...")
         self._print_report_and_save_history(history)
         self.write_summary_file(history)
-        logging.info("DONE")
+
+        logging.info("ALL DONE with SCONE.")
 
     # train the model, returns trained model & training log
     # requires:
@@ -187,8 +233,10 @@ class SconeClassifier():
             logging.info("not class balanced, applying class weights")
             class_weights = {k: (self.batch_size / (self.num_types * v)) for k,v in self.abundances.items()}
 
-        train_set = train_set.map(lambda image, label, *args: (image, label)).shuffle(100_000).cache().batch(self.batch_size)
-        val_set = val_set.map(lambda image, label, *args: (image, label)).shuffle(10_000).cache().batch(self.batch_size)
+        train_set = train_set.map(lambda image, label, 
+                                  *args: (image, label)).shuffle(100_000).cache().batch(self.batch_size)
+        val_set = val_set.map(lambda image, label, 
+                              *args: (image, label)).shuffle(10_000).cache().batch(self.batch_size)
         logging.info("starting to train")
         history = model.fit(
             train_set,
@@ -197,19 +245,52 @@ class SconeClassifier():
             verbose=1,
             class_weight=class_weights if not self.class_balanced else None)
 
-        model.save(f"{self.output_path}/trained_model")
+        outdir_train_model = f"{self.output_path}/trained_model"
+        model.save(outdir_train_model)
+
+        # Jun 2024 RK - write mean filter wavelengths to ensure these values
+        #               are the same in predict mode.
+        self.write_filter_wavelengths(outdir_train_model)  # Jun 2024, RK
+
         return model, history
+
+    def write_filter_wavelengths(self,outdir_train_model):
+
+        # Created Jun 2024 by R.Kessler
+        # write central wavelength per band in train_model folder,
+        # so that predict mode can pick up the same filter wavelength
+        # for creating heatmaps.
+
+        filter_wavelength_file = f"{outdir_train_model}/{FILTER_WAVE_FILE}"
+        logging.info(f"Write mean filter_wave to: {filter_wavelength_file}")
+        util.load_SIM_README_DOCANA(self.scone_config)
+        util.load_SIM_GENFILTER_WAVE(self.scone_config)
+        
+        band_to_wave = self.scone_config['band_to_wave']
+
+        # write yaml brute force so that filters appear in same order that they were read
+        with open(filter_wavelength_file, 'w') as outfile:
+            outfile.write(f"# central wavelength vs band used to create heatmaps for training.\n")
+            for band, wave in band_to_wave.items():
+                outfile.write(f"{band}:  {wave} \n")
+            #yaml.dump(band_to_wave, outfile, default_flow_style=False)
+
+        return
 
     def predict(self, dataset, dataset_ids=None):
         if self.external_trained_model and not self.trained_model:
-            self.trained_model = models.load_model(self.external_trained_model, custom_objects={"Reshape": self.Reshape})
+            self.trained_model = models.load_model(self.external_trained_model, 
+                                                   custom_objects={"Reshape": self.Reshape})
 
         if not self.trained_model:
             raise RuntimeError('model has not been trained! call `train` on the SconeClassifier instance before predict!')
 
         dataset = dataset.cache() # otherwise the rest of the dataset operations won't return entries in the same order
         dataset_no_ids = dataset.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
+
+
         predictions = self.trained_model.predict(dataset_no_ids, verbose=0)
+
         if self.categorical:
             predictions = np.argmax(predictions, axis=1) #TODO: is this the best way to return categorical results? doesnt preserve confidence info
         predictions = predictions.flatten()
@@ -225,7 +306,7 @@ class SconeClassifier():
         return df_dict, acc
 
     def test(self, test_set=None):
-        if not self.mode == "predict":
+        if not self.mode == MODE_PREDICT :
             raise RuntimeError('no testing in train mode')
         if not self.trained_model:
             raise RuntimeError('model has not been trained! call `train` on the SconeClassifier instance before test!')
@@ -297,11 +378,18 @@ class SconeClassifier():
             filenames = ["{}/{}".format(heatmaps_path, f.name) for heatmaps_path in self.heatmaps_paths for f in os.scandir(heatmaps_path) if "tfrecord" in f.name]
         else:
             filenames = ["{}/{}".format(self.heatmaps_paths, f.name) for f in os.scandir(self.heatmaps_paths) if "tfrecord" in f.name]
+
+
         np.random.shuffle(filenames)
-        logging.info(len(filenames))
+        logging.info(f"Found {len(filenames)} heatmap files")
+        logging.info(f"FIrst random heatmap file: {filenames[0]}")
+
         raw_dataset = tf.data.TFRecordDataset(
             filenames,
             num_parallel_reads=80)
+
+        #print(f"\n xxx raw_dataset = {raw_dataset}\n")  # .xyz
+        #sys.stdout.flush() 
 
         return raw_dataset
 
@@ -337,11 +425,11 @@ class SconeClassifier():
 
             if i == 0:
                 train_set = curr_train_set
-                val_set = curr_val_set if self.mode == "predict" else curr_val_test_set
+                val_set = curr_val_set if self.mode == MODE_PREDICT else curr_val_test_set
                 test_set = curr_test_set
             else:
                 train_set = train_set.concatenate(curr_train_set)
-                val_set = val_set.concatenate(curr_val_set) if self.mode == "predict" else val_set.concatenate(curr_val_test_set)
+                val_set = val_set.concatenate(curr_val_set) if self.mode == MODE_PREDICT else val_set.concatenate(curr_val_test_set)
                 test_set = test_set.concatenate(curr_test_set)
 
         # train_set = dataset.take(train_set_size)
@@ -365,11 +453,11 @@ class SconeClassifier():
     def _split_and_retrieve_data_stratified(self):
         dataset, size = self._retrieve_data(self._load_dataset())
 
-        train_set, val_set, test_set, self.abundances = stratified_split(dataset, self.train_proportion, self.types, self.mode == "predict", self.class_balanced)
+        train_set, val_set, test_set, self.abundances = stratified_split(dataset, self.train_proportion, self.types, self.mode == MODE_PREDICT, self.class_balanced)
 
         train_set = train_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
         val_set = val_set.prefetch(tf.data.experimental.AUTOTUNE).cache()
-        test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if self.mode == "predict" else None
+        test_set = test_set.prefetch(tf.data.experimental.AUTOTUNE).cache() if self.mode == MODE_PREDICT else None
 
         train_set = train_set.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
         val_set = val_set.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
@@ -380,6 +468,7 @@ class SconeClassifier():
 
 class SconeClassifierIaModels(SconeClassifier):
     # define my own reshape layer
+    # Apr 16 2024:  obsolete ??
     class Reshape(layers.Layer):
         def call(self, inputs):
             return tf.transpose(inputs, perm=[0,3,2,1])
@@ -449,6 +538,7 @@ class SconeClassifierIaModels(SconeClassifier):
 
         Ia_dataset = Ia_dataset.shuffle(100_000)
         non_Ia_dataset = non_Ia_dataset.shuffle(100_000)
+
         return Ia_dataset, non_Ia_dataset
 
 
@@ -477,7 +567,7 @@ if __name__ == "__main__":
 
     args = get_args()
 
-    key_expandvar_list = [ 'output_path' ]
+    key_expandvar_list = [ 'output_path', 'trained_model' ]
     scone_config = util.load_config_expandvars(args.config_path, key_expandvar_list )
 
     # define full path to heatmaps based on subdir

@@ -1,3 +1,7 @@
+#
+# Apr 2 2024 RK - replace fragile 'SNTYPE' with 'SIM_GENTYPE'
+
+import os, sys, logging
 import tensorflow as tf
 import numpy as np
 import pandas as pd
@@ -8,29 +12,49 @@ from george import kernels
 from astropy.table import Table
 from astropy.io import fits
 import yaml
-import os
+
 
 def get_band_to_wave(survey):
+
+    # Apr 2024 RK - this method is for legacy scone only;
+    #   refactored scone reads badn_to_wave from FILTERS dictionary in sim-readme.
+
+    band_to_wave = None
+
     if survey == 'NGRST' or survey == 'ROMAN' or survey == 'WFIRST':
-        return {
+        band_to_wave = {
             "R": 6296.73,
             "Z": 8744.77,
             "Y": 10653.88,
             "J": 12975.72,
             "H": 15848.21,
-            "F": 18475.41
+            "F": 18475.41,
+            "K": 21255.00  # RK 4.2024
         }
     if survey == 'LSST' or survey == 'DES':
-        return {
-            "u": 3670.69,
+        # Jun 2024 RK-comment: these <lam> are for 2017-era LSST bands without atmos-trans.
+        #    They are quite off for DES (4828, 6435, 7828, 9181). I am NOT fixing it now
+        #    to ensure that LEGACY scone behaves the same as before, and it is fine if
+        #    both training and predict mode use the same <lam>.
+        #    The refactored SCONE reads <lam> from sim-readme, but not for real data ...
+        #    so need a more robust fix for real data.
+        band_to_wave = {
+            "u": 3670.69,  # 2017 era, LSST-approx without atmos-trans
             "g": 4826.85,
             "r": 6223.24,
             "i": 7545.98,
             "z": 8590.90,
             "Y": 9710.28
         }
+    if survey == 'DESxxx':  # maybe enable this later for DES ?? 
+        band_to_wave = {
+            "g": 4828.0,  # from DES-SN5YR (Jun 2024)
+            "r": 6435.0,
+            "i": 7828.0,
+            "z": 9181.0
+        }
     if survey == "SDSS":
-        return {
+        band_to_wave = {
             "u": 3561.79,
             "g": 4718.87,
             "r": 6185.19,
@@ -38,14 +62,21 @@ def get_band_to_wave(survey):
             "z": 8961.49
         }
     if "PS1" in survey:
-        return {
+        band_to_wave = {
             "g": 4866.46,
             "r": 6214.62,
             "i": 7544.57,
             "z": 8679.47,
             "y": 9633.28
         }
-    raise ValueError(f"survey {survey} not registered! contact helenqu@sas.upenn.edu")
+        
+    if band_to_wave is None:
+        raise ValueError(f"survey {survey} not registered for LEGACY scone! " \
+                         f"contact helenqu@sas.upenn.edu")
+
+    logging.info(f"Return hard-wired {survey} band_to_wave = {band_to_wave}")
+    return band_to_wave
+
 
 def read_fits(fname, sn_type_id_to_name, survey_from_config, drop_separators=False):
     """Load SNANA formatted data and cast it to a PANDAS dataframe
@@ -94,13 +125,33 @@ def read_fits(fname, sn_type_id_to_name, survey_from_config, drop_separators=Fal
     if drop_separators:
         lcdata = lcdata[lcdata['MJD'] != -777.000]
 
-    df_header = df_header[["SNID", "SNTYPE", "PEAKMJD", "REDSHIFT_FINAL", "REDSHIFT_FINAL_ERR", "MWEBV"]]
-    df_header = df_header.rename(columns={"SNID":"object_id", "SNTYPE": "true_target", "PEAKMJD": "true_peakmjd", "REDSHIFT_FINAL": "true_z", "REDSHIFT_FINAL_ERR": "true_z_err", "MWEBV": "mwebv"})
-    df_header.replace({"true_target": sn_type_id_to_name}, inplace=True)
+    KEY_SIM_GENTYPE = 'SIM_GENTYPE'
+    KEY_SNTYPE      = 'SNTYPE'   # always there for real data
+    is_sim = KEY_SIM_GENTYPE in df_header.columns
 
-    band_colname = "FLT" if "FLT" in lcdata.columns else "BAND" # check for filter column name from different versions of SNANA
+    head_col_list = ["SNID", "PEAKMJD", "REDSHIFT_FINAL", "REDSHIFT_FINAL_ERR", "MWEBV"]
+    head_col_dict = {"SNID":"object_id", "PEAKMJD": "true_peakmjd", 
+                     "REDSHIFT_FINAL": "true_z", "REDSHIFT_FINAL_ERR": "true_z_err", "MWEBV": "mwebv"}
+
+    if is_sim: 
+        # append column with true GENTYPE
+        head_col_list.append(KEY_SIM_GENTYPE)
+        head_col_dict[KEY_SIM_GENTYPE] = "true_target"
+    else:
+        # for real data, append anything to avoid future crash
+        head_col_list.append(KEY_SNTYPE)
+        head_col_dict[KEY_SNTYPE] = "true_target"   
+
+    df_header = df_header[head_col_list]
+    df_header = df_header.rename(columns=head_col_dict)
+    if is_sim:
+        df_header.replace({"true_target": sn_type_id_to_name}, inplace=True)
+
+    # check for filter column name from different versions of SNANA
+    band_colname = "FLT" if "FLT" in lcdata.columns else "BAND" 
     lcdata = lcdata[["SNID", "MJD", band_colname, "FLUXCAL", "FLUXCALERR"]]
-    rename_columns = {"SNID":"object_id", "MJD": "mjd", band_colname: "passband", "FLUXCAL": "flux", "FLUXCALERR": "flux_err"}
+    rename_columns = {"SNID":"object_id", "MJD": "mjd", band_colname: "passband", 
+                      "FLUXCAL": "flux", "FLUXCALERR": "flux_err"}
     for old_colname, new_colname in rename_columns.items():
         lcdata.rename_column(old_colname, new_colname)
 

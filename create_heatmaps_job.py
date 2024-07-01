@@ -1,16 +1,7 @@
 #!/usr/bin/env python
 #
 #
-# Feb 29 2024 RK 
-#   + replace print with logging.info
-#   + add 'heamaps_logfile'  to list of paths to expandvars (in load_config)
-#   + add 'heamaps_donefile' to list of paths to expandvars (in load_config)
-#   + define jobid[_list] that should match the heatmap_[jobid] files.
-#   + new methods  write_log_fail_message and write_donefile
-#   + replace .format with more reliable f-strings
-#   + new config input keys prescale_heatmap  ;
-#      keep legacy key sim_fraction 
-#   + new/optional --slurm_id and --nslurm_tot input (more efficient)
+# Feb 29 2024 RK - begin major refactor (see github issue...)
 
 import os, sys, yaml, logging, glob
 import argparse
@@ -36,13 +27,17 @@ def get_args():
     parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
 
     parser.add_argument('--config_path', type=str, 
-                        help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
+                        help='absolute or relative path to your yml config file, ' \
+                        ' i.e. "/user/files/create_heatmaps_config.yml"')
 
     # input explicit start and end jobid (original feature)
     parser.add_argument('--start', type=int, default=None,
                         help='metadata/lcdata files index to start processing at')
     parser.add_argument('--end', type=int, default=None,
                         help='metadata/lcdata files index to stop processing at')
+
+    parser.add_argument('--hdf5_select_file', type=str, default=None,
+                        help='SNIDs stored (hdf5 format) from snid_select_files key in config file')
 
     # ... OR ...
 
@@ -71,32 +66,50 @@ def get_args():
 def load_config(args):
 
     config_path = args.config_path
+    LEGACY      = (args.start is not None)
 
     key_expandvar_list = [ 'input_data_paths', 'lcdata_paths', 'metadata_paths', 
                            'heatmaps_path', 'output_path', 
-                           'heatmaps_logfile', 'heatmaps_donefile'  ]
+                           'heatmaps_logfile', 'heatmaps_donefile', 'trained_model'  ]
 
     config = util.load_config_expandvars(config_path, key_expandvar_list)
-    
+    mode = config['mode']  # train or predict
+
     # if sim data folders are provided, read list file(s) and set internal array
     # for each PHOT.FITS and *HEAD.FITS file
     load_lcdata_metadata(config)
 
-    key = 'trained_model'
-    config[key] = config.setdefault(key,None)
-    if key in config:
-        config[key] = os.path.expandvars(str(config[key]))  # str protects null
-        # Q: should we abort if this path does not exist ? YES
+    # - - - - - - -
+    # read info from sim-readme and append it to config as if it were read
+    # from scone input file.
 
-    # if no prescale keys are given, set them to 1.
-    key = 'prescale_heatmap' 
-    config[key] = config.setdefault(key,1)
+    # start by by scooping up DOCUMENTATION-readme info from all sim-data
+    util.load_SIM_README_DOCANA(config)
+    util.load_SIM_GENTYPE_TO_NAME(config)  # read map of gentype <--> Ia,nonIa (train only)
 
+    # read mean filter wavelengths
+    if mode == MODE_PREDICT :
+        # Jun 2024, RK: read from train_model dir to ensure consistency.
+        util.load_TRAIN_GENFILTER_WAVE(config)
+    else:
+        # training is always sim, so read filter mean wave from sim-readme
+        util.load_SIM_GENFILTER_WAVE(config)  
+
+    #if LEGACY:
+    #    logging.info(f"LEGACY override {KEY_BAND_TO_WAVE} with old hard-wired defaults")
+    #    config[KEY_BAND_TO_WAVE] = None
+        
     key = 'sim_fraction'  # legacy key for old run.py
     config[key] = config.setdefault(key,1)
     
     key = 'heatmaps_path'
     config[key] = config['output_path'] + '/' + args.heatmaps_subdir
+
+    key = 'hdf5_select_file'  
+    config[key] = args.hdf5_select_file   # internal command line arg
+
+    key = 'snid_select_files'      # from user config input
+    config[key] = config.setdefault(key,None)
 
     return config
 
@@ -136,21 +149,67 @@ def load_lcdata_metadata(config):
                     config[key_lcdata].append(lcdata)
                     n_load += 1
 
-        logging.info("Stored path for {n_load} PHOT.FITS files (lcdata_paths).")
-        logging.info("Stored path for {n_load} HEAD.FITS files (meta_paths).")
+        logging.info(f"Stored path for {n_load} PHOT.FITS files (lcdata_paths).")
+        logging.info(f"Stored path for {n_load} HEAD.FITS files (meta_paths).")
 
     return
 
+
+def remove_load_prescale(config):
+
+    # if no prescale keys are given, set them to 1.
+    # Allow for prescale_heatmaps: 10,20  # ps=10 for Ia and 20 for nonIa
+    # If user-input nevt_select_heatmap is given, compute prescale for Ia/nonIa
+    # to get desired stats.
+    # if nevt_select_heatmap and prescale_heatmaps are both given,
+    # nevt_select_heatmap takes priority.
+
+    key_ps = 'prescale_heatmaps' 
+    config[key_ps] = config.setdefault(key_ps,1)
+
+    mode = config['mode']
+    if mode == MODE_PREDICT: 
+        config['prescale_heatmaps_dict'] = None
+        return
+
+    key_nevt = 'nevt_select_heatmaps'
+    config[key_nevt] = config.setdefault(key_nevt,None)
+
+    simtag_list = [ SIMTAG_Ia, SIMTAG_nonIa ]
+    prescale_heatmaps_dict = {}
+
+    adjective_prescale = ""
+
+    if config[key_nevt] is not None:
+        adjective_prescale = "COMPUTED"
+        SIM_STAT_SUMMARY = config['SIM_STAT_SUMMARY'] 
+        nevt_select_list = config[key_nevt].split(',')
+        for simtag, nevt_select in zip(simtag_list,nevt_select_list):
+            nevt_sim = SIM_STAT_SUMMARY[simtag]
+            ps       = int(nevt_sim / int(nevt_select) + 0.5)
+            if ps == 0 : ps = 1
+            prescale_heatmaps_dict[simtag] = ps
+        logging.info(f"{key_nevt} = {config[key_nevt]}  (Ia,nonIa)")
+    else:
+        adjective_prescale = "USER"
+        ps_list     = str(config[key_ps]).split(',')        
+        if len(ps_list) == 1 :
+            ps_list.append(ps_list[0])
+        for simtag, ps in zip(simtag_list, ps_list):
+            prescale_heatmaps_dict[simtag] = ps
+
+    config['prescale_heatmaps_dict']  = prescale_heatmaps_dict
+
+    # update config ps that will appear in SCONE_SUMMARY.LOG
+    config[key_ps] = str(prescale_heatmaps_dict[SIMTAG_Ia]) + ',' + \
+                     str(prescale_heatmaps_dict[SIMTAG_nonIa]) 
+
+    logging.info(f"{adjective_prescale} prescale_heatmaps = " \
+                 f"{prescale_heatmaps_dict}")
+    
+    return
+
 def write_log_fail_message(args, config, failed_jobid_list):
-
-    # xxxxxx mark delete Mar 3 2024 xxxxxxxxx
-    # write error message to log file.
-    #heatmaps_path = config["heatmaps_path"]
-    #default_logfile = os.path.join(heatmaps_path, 
-    #                               f"create_heatmaps__{os.path.basename(args.config_path).split('.')[0]}.log")
-    #logfile_path = config.get("heatmaps_logfile", default_logfile)
-    # xxxxxxxxxx end mark xxxxxxxxxxx
-
 
     msg  = f"\n{MSG_DONEFILE_FAILURE}\n"
     msg += f"\t Indices of failed create heatmaps jobs: {failed_jobid_list}\n"
@@ -185,7 +244,10 @@ def write_final_summary_file(args, config):
     # then write grand summary to a single file that can be read by
     # other pipeline components.
 
-    # scoop up list of summary files .xyz
+    LEGACY = (args.start is not None)
+    REFAC  = not LEGACY
+
+    # scoop up list of summary files 
     heatmap_list, summary_list  = get_heatmap_file_list(config)
     n_heatmap_found = len(heatmap_list)
     n_summ_found    = len(summary_list)
@@ -215,7 +277,7 @@ def write_final_summary_file(args, config):
                 lcdata_dir_unique.append(dir_name)
 
             # sum nlc for each true type; avoid crash if NLC_dict is empty.
-            NLC_dict = summary_info['NLC']
+            NLC_dict = summary_info['N_LC']
             if NLC_dict is not None:
                 for lctype, nlc in NLC_dict.items():
                     if lctype not in nlc_sum_dict: nlc_sum_dict[lctype] = 0
@@ -223,7 +285,9 @@ def write_final_summary_file(args, config):
 
             # sum cpu
             cpu_sum_minutes += float(summary_info['CPU'])
-    
+
+            # fetch prescales
+            ps_list = summary_info['PRESCALE_HEATMAPS']
 
     # - - - - - - 
     # create final summary file
@@ -237,18 +301,32 @@ def write_final_summary_file(args, config):
         cpu_sum_hr = cpu_sum_minutes/60.0                            
         s.write(f"CPU_SUM:        {cpu_sum_hr:.2f}   # hr \n")
 
-        s.write(f"SIM_FRACTION:      {config['sim_fraction']}  \n")
-        s.write(f"PRESCALE_HEATMAP:  {config['prescale_heatmap']} \n")
+        if LEGACY :
+            sim_frac = config['sim_fraction']
+            if sim_frac != 1 :
+                s.write(f"SIM_FRACTION:       {config['sim_fraction']}  # legacy key\n")
+
+        if REFAC:
+            s.write(f"PRESCALE_HEATMAPS:  {ps_list}    # Ia,nonIa\n")
 
         s.write("N_LC: \n")
+        mode = config['mode']
         for lctype, nlc in nlc_sum_dict.items():
-            s.write(f"  {lctype}:  {nlc}    # true type: n_lc in heatmaps (for training)\n")
+            key_plus_colon = f"{lctype}:"            
+            s.write(f"  {key_plus_colon:<8}  {nlc}    \n")
 
         # write all directories used (not FITS files; just folders)
         s.write(f"\n")
         s.write(f"INPUT_DATA_DIRS: \n")
         for dir_name in lcdata_dir_unique:
             s.write(f"  - {dir_name}\n")
+
+        if config['snid_select_files']:
+            s.write(f"\n")
+            s.write(f"SNID_SELECT_FILES: \n")
+            for select_file in config['snid_select_files']:
+                s.write(f"  - {select_file}\n")
+
 
     return
 
@@ -257,11 +335,11 @@ def write_done_file(config, donefile_info):
     # Write done.txt file to communicate "all done" for higher level pipelines.
 
 
-    default_donefile = os.path.join(config["heatmaps_path"], SBATCH_DONE_FILE)
+    default_donefile = os.path.join(config["heatmaps_path"], SBATCH_DONE_FILE_BASE )
     donefile_path    = config.get("heatmaps_donefile", default_donefile)
 
     with open(donefile_path, "w+") as donefile:
-        donefile.write(donefile_info)
+        donefile.write(f"{donefile_info}\n")
 
     return
 
@@ -289,7 +367,7 @@ if __name__ == "__main__":
         for jobid in range(args.start, args.end):
             proc = mp.Process(target=create_heatmaps, args=(config, jobid))
             proc.start()
-            logging.info(f"\t started heatmap jobid {jobid}")
+            logging.info(f"\t started legacy heatmap jobid {jobid}")
             proc_list.append(proc)
             jobid_list.append(jobid)
     else:
@@ -300,7 +378,7 @@ if __name__ == "__main__":
             if jobid % args.nslurm_tot == args.slurm_id:
                 proc = mp.Process(target=create_heatmaps, args=(config, jobid))
                 proc.start()
-                logging.info(f"\t started heatmap jobid {jobid}")
+                logging.info(f"\t started refac heatmap jobid {jobid}")
                 proc_list.append(proc)
                 jobid_list.append(jobid)
 

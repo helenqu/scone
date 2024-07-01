@@ -12,6 +12,10 @@ import time
 import abc
 from create_heatmaps.helpers import build_gp, image_example, get_extinction, read_fits, get_band_to_wave
 
+
+SIMTAG_Ia    = "Ia"      # from GENTYPE_TO_CLASS dict in sim readme
+SIMTAG_nonIa = "nonIa"
+
 class CreateHeatmapsBase(abc.ABC):
     def __init__(self, config, index):
         self.index = index
@@ -19,6 +23,7 @@ class CreateHeatmapsBase(abc.ABC):
         self.survey = config.get("survey", None)
 
         # file paths
+        self.mode          = config['mode']
         self.metadata_path = config["metadata_paths"][index]
         self.lcdata_path   = config["lcdata_paths"][index]
         self.output_path   = config["heatmaps_path"]
@@ -29,26 +34,55 @@ class CreateHeatmapsBase(abc.ABC):
         self.mjd_bins        = config["num_mjd_bins"]
         self.has_peakmjd     = config.get("has_peakmjd", True)
 
-        # heatmap labeling
-        self.categorical = config["categorical"]
-        self.types       = config["types"]
-        logging.info(f"List of types: {self.types}")
-        self.sn_type_id_to_name = config["sn_type_id_to_name"] # SNANA type ID to type name (i.e. 42 -> SNII)
-        self.type_to_int_label = {type_str: 1 if type_str == "SNIa" or type_str == "Ia" else 0 for type_str in self.types} if not self.categorical else {v:i for i,v in enumerate(sorted(self.types))} # int label for classification
+        # load info from sim-readme that has been appended to config (4.3.2024, RK)
+        self.SIM_GENTYPE_TO_CLASS = config.setdefault("SIM_GENTYPE_TO_CLASS",{}) 
+        self.band_to_wave         = config.setdefault("band_to_wave", None) 
 
-        logging.info(f"type to int label: {self.type_to_int_label}")
+        self.REFAC  = len(self.SIM_GENTYPE_TO_CLASS) > 0  or \
+                      config.setdefault('prob_column_name',None)
+        self.LEGACY = not self.REFAC
 
+        self.IS_DATA_REAL = len(self.SIM_GENTYPE_TO_CLASS) == 0
+        self.IS_DATA_SIM  = len(self.SIM_GENTYPE_TO_CLASS) >  0
+
+        # - - - - - - - 
+        # RK 4.2.2024: if type_to_name map is not already read from sim-data readme,
+        #              then use legacy feature to read it from user config file.
+
+        if self.REFAC :
+            map_source       = "sim-readme (refac)"
+            self.categorical = False  # disable for now; maybe restore later
+            self.types       = [SIMTAG_nonIa, SIMTAG_Ia]
+            self.type_to_int_label  = {SIMTAG_nonIa: 0,   SIMTAG_Ia: 1}
+            self.sn_type_id_to_name = self.SIM_GENTYPE_TO_CLASS
+
+        else:
+            # legacy feature reading hard-wired map from scone-input config
+            map_source = "config (legacy)"
+            self.categorical        = config["categorical"]
+            self.types              = config["types"]
+            self.sn_type_id_to_name = config["sn_type_id_to_name"] 
+            self.type_to_int_label  = {type_str: 1 if type_str == "SNIa" or type_str == "Ia" else 0 for type_str in self.types} if not self.categorical else {v:i for i,v in enumerate(sorted(self.types))} # int label for classification
+
+
+        logging.info(f"")
+        logging.info(f"TYPE <--> NAME maps from {map_source}:")
+        logging.info(f"  List of types: {self.types}")
+        logging.info(f"  sn_type_id_to_name: {self.sn_type_id_to_name}")
+        logging.info(f"  type_to_int_label : {self.type_to_int_label}")
+
+        # - - - - - - - -
         # restricting number of heatmaps that are made
-        self.ids_path = config.get("ids_path", None)
-
-        # get sim fraction (Mar 1 2024)
-        self.prescale_heatmap = config['prescale_heatmap']
-        ps = self.prescale_heatmap
-        if ps != 1 :
-            logging.info(f"Select 1/{ps} of light curves\n")
+        if self.LEGACY: 
+            self.ids_path = config.get("ids_path", None)
+        else:
+            # refactored, RK
+            self.hdf5_select_file = config.get("hdf5_select_file", None)
 
         self.load_data()
+
         return
+
 
     def load_data(self):
         logging.info(f'job {self.index}: process file {self.lcdata_path}')
@@ -59,27 +93,76 @@ class CreateHeatmapsBase(abc.ABC):
                 logging.info(" file has already been processed, exiting")
                 sys.exit(0)
 
-        self.metadata, self.lcdata, survey = read_fits(self.lcdata_path, self.sn_type_id_to_name, self.survey)
-        metadata_ids = self.metadata[self.metadata.true_target.isin(self.types)].object_id
+        self.metadata, self.lcdata, survey = \
+                read_fits(self.lcdata_path, self.sn_type_id_to_name, self.survey)
+
+        #xxx metadata_ids = self.metadata[self.metadata.true_target.isin(self.types)].object_id
+        if self.IS_DATA_REAL:
+            metadata_ids = self.metadata.object_id # take everything for real data
+        else:
+            metadata_ids = self.metadata[self.metadata.true_target.isin(self.types)].object_id
 
         self.lcdata.add_index('object_id')
         self.lcdata['passband'] = [flt.strip() for flt in self.lcdata['passband']]
         self.lcdata_ids = np.intersect1d(self.lcdata['object_id'], metadata_ids)
 
         # survey info
-        self.band_to_wave = get_band_to_wave(survey)
+        if self.band_to_wave is None:
+            self.band_to_wave = get_band_to_wave(survey) # legacy : hard-wired params
 
-        if self.ids_path:
-            ids_file = h5py.File(self.ids_path, "r")
-            self.ids = ids_file["ids"][()] # turn this into a numpy array
-            logging.info(f"example id {self.ids[0]}")
+        if self.LEGACY:
+            ids_path = self.ids_path
+        else:
+            ids_path = self.hdf5_select_file      # refactored, RK
+
+        if ids_path:
+            logging.info(f"Open snid-select file:  {ids_path}")
+            ids_file     = h5py.File(ids_path, "r")
+            ids_name     = self.get_hdf5_ids_name()
+            self.ps_list = ids_file['prescales'][()]  # recover prescales used to select [Ia,nonIa]
+            self.ids     = ids_file[ids_name][()]     # turn this into a numpy array
+            logging.info(f"  Select-Prescale list [Ia,nonIa] = {self.ps_list}")
+            logging.info(f"  Example selected SNIDs:  {self.ids[0:4]}")
             ids_file.close()
-        self.has_ids = self.ids_path and self.ids is not None
-        self.ids_for_current_file = np.intersect1d(self.lcdata_ids, self.ids) if self.has_ids else self.lcdata_ids
+        else:
+            self.ps_list = [ 1, 1]
+        
+        self.has_ids = ids_path and self.ids is not None
+        self.ids_for_current_file = np.intersect1d(self.lcdata_ids, self.ids) \
+                                    if self.has_ids else self.lcdata_ids
 
         logging.info(f"job {self.index}: {'found' if self.has_ids else 'no'} idList, " \
                      f"expect {len(self.ids_for_current_file)}/{len(self.lcdata_ids)} heatmaps for this file")
 
+        return
+        # end load_data
+
+    def get_hdf5_ids_name(self):
+
+        # Apr 2024
+        # Return name of snid set in hdf5 file.
+        # For legacy and real data, name is "ids".
+        # For sim, name is ids_Ia or ids_nonIa (to avoid random SNID overlaps)
+    
+        ids_base_name = "ids"
+
+        if self.LEGACY:
+            ids_name = ids_base_name
+            return ids_name
+
+        if self.IS_DATA_REAL:
+            ids_name = ids_base_name
+        else:
+            # ?? simtag = SIMTAG_Ia  if "SNIaMODEL" in self.lcdata_path    else simtag = SIMTAG_nonIa
+            if "SNIaMODEL" in self.lcdata_path :  
+                simtag = SIMTAG_Ia 
+            else:                                 
+                simtag = SIMTAG_nonIa 
+
+            ids_name = ids_base_name + '_'  + simtag        # ids_Ia or ids_nonIa
+
+        return ids_name
+    
     @abc.abstractmethod
     def run(self):
         pass
@@ -110,23 +193,12 @@ class CreateHeatmapsBase(abc.ABC):
             heatmap_file = f"{output_path}/heatmaps_{self.index:04d}.tfrecord"
             with tf.io.TFRecordWriter(heatmap_file) as writer:
                 for i, sn_id in enumerate(self.ids_for_current_file):
-                    if i % 1000 == 0:
-                        n_lc = len(self.ids_for_current_file)
-                        logging.info(f"job {self.index}: processing {i} of {n_lc} light curves" )
-                        if i == 1000:
-                            time_to_1000  = (time.time() - self.t_start)/60.0  # minutes
-                            time_predict  = (len(self.ids_for_current_file)/1000)*time_to_1000
-                            msg_t = f"job {self.index}: {time_to_1000:.2f} min for 1000 heatmaps; " \
-                                    f"predict total process time: {time_predict:.2f} min"
-                            logging.info(f"{msg_t}")
-
-                    # apply pre-scale here.
-                    n_lc_read += 1
-                    if int(sn_id) % self.prescale_heatmap != 0:  # RK - Mar 1 2024
-                        continue
-
-                    n_lc_write += 1
+                    self.print_heatmap_status(i)
                     sn_name, *sn_data = self._get_sn_data(sn_id, mjd_minmax)
+
+                    n_lc_read += 1                    
+                    n_lc_write += 1
+
                     if sn_data[0] is None:
                         self._remove(sn_name)
                         continue
@@ -149,45 +221,75 @@ class CreateHeatmapsBase(abc.ABC):
                             break
                         self.type_to_int_label[sn_name] = 1 if sn_name == "SNIa" or sn_name == "Ia" else 0
 
-                    z = sn_metadata['true_z'].iloc[0]
+                    z     = sn_metadata['true_z'].iloc[0]
                     z_err = sn_metadata['true_z_err'].iloc[0]
+
+                    if i == -99 :
+                        print(f" xxx ------------------------------------- \n")
+                        print(f" xxx i={i}  SNID={sn_name}  z={z:.3f} +_ {z_err:.3f}  " \
+                              f" mwebv={milkyway_ebv:.4f}\n")
+                        print(f" xxx wave = {wave}")
+                        print(f" xxx sn_data = {sn_data}")
+                        sys.stdout.flush() 
+                        print(f" xxx heatmap = \n{heatmap}\n")  # .xyz
+                        sys.stdout.flush() 
+
 
                     writer.write(image_example(heatmap.flatten().tobytes(), 
                                                self.type_to_int_label[sn_name], sn_id, z, z_err))
+
+                    
                     self._done(sn_name, sn_id)
                     
             # - - - -
             logging.info(f"job {self.index}: Finsished processing " \
                          f"{n_lc_write} of {n_lc_read} light curves.")
 
-
-            # xxxxxxxxx mark delete Mar 3 2024 xxxxxxxxx
-            # RK - collisions reading/writing to same finished_filenames file is likely
-            #   leading to rate (1-2%) of tasks crashing. This information is
-            #    contained in the new heatmap*summary file per task, where there is
-            #    no write collision.
-            do_legacy_finished_filenames = False
-            if do_legacy_finished_filenames:
-                if not os.path.exists(self.finished_filenames_path):
-                    pd.DataFrame({"filenames": [os.path.basename(self.metadata_path)]}).to_csv(self.finished_filenames_path, index=False)
-                else:
-                    finished_filenames = pd.read_csv(self.finished_filenames_path)
-                    finished_filenames = pd.concat([finished_filenames, 
-                                                    pd.DataFrame({"filenames": [os.path.basename(self.metadata_path)]})] )
-                    finished_filenames.to_csv(self.finished_filenames_path, index=False)
-            # xxxxxxxx end mark delete xxxxxxxxxxxx
-
-
             # - - - - - 
             # write REPORT information to done.log file :
-            self.write_done_file_legacy(output_path)  # original/unformatted
+            if self.LEGACY:
+                self.write_done_file_legacy(output_path)  # original/unformatted
+
             self.write_summary_file(heatmap_file)     # Mar 2024 RK - formatted summary 
             return
             
+    def print_heatmap_status(self,i):
+        # Created Jun 2024 by R.Kessler
+        # print status every 1000 events, and predict remaining time after 1st 1000 events.
+        if i % 1000 == 0:
+            n_lc = len(self.ids_for_current_file)
+            logging.info(f"job {self.index}: processing {i} of {n_lc} light curves" )
+            if i == 1000:
+                time_to_1000  = (time.time() - self.t_start)/60.0  # minutes
+                time_predict  = (len(self.ids_for_current_file)/1000)*time_to_1000
+                msg_t = f"job {self.index}: {time_to_1000:.2f} min for 1000 heatmaps; " \
+                        f"predict total process time: {time_predict:.2f} min"
+                logging.info(f"{msg_t}")
+
+        return
         
     # ================================================
     # HELPER FUNCTIONS
     # ================================================
+
+    def remove_apply_prescale_reject(self, sn_id, sn_name):
+
+        # Created Apr 2024 R.Kessler
+        # check if event is rejected based on prescale and type (Ia,nonIa).
+        # Return True to reject event.
+        # Input sn_name is the general string type: either 'Ia' or 'nonIa'
+
+
+        reject  = False
+        ps_dict = self.prescale_heatmaps_dict
+        if ps_dict is None or self.LEGACY : 
+            return reject  # never reject for predict mode
+
+        ps = ps_dict[sn_name]
+        if int(sn_id) % ps != 0:  
+            reject = True
+
+        return reject
 
     def write_summary_file(self, heatmap_file):
         
@@ -208,10 +310,15 @@ class CreateHeatmapsBase(abc.ABC):
             s.write(f"JOBID:          {self.index}\n")
             s.write(f"CPU:            {t_proc_minutes:.2f}            # minutes \n")
             s.write(f"LCDATA_PATH:    {self.lcdata_path} \n")
-
-            s.write(f"NLC: \n")
-            for lctype, n_lc in self.done_by_type.items():
-                s.write(f"  {lctype}:  {n_lc:6d}       # TYPE: NLC\n")
+            s.write(f"PRESCALE_HEATMAPS:  {self.ps_list}\n")
+            
+            s.write(f"N_LC: \n")
+            if self.mode == 'train':
+                for lctype, n_lc in self.done_by_type.items():
+                    s.write(f"  {lctype}:  {n_lc:6d}       # TYPE: NLC\n")
+            else:
+                n_lc = len(self.done_ids)
+                s.write(f"  total:  {n_lc:6d} \n")
 
             # cpu ??
             #s.write(f"\n# xxx type_to_int_label = {self.type_to_int_label}\n")
@@ -250,7 +357,7 @@ class CreateHeatmapsBase(abc.ABC):
             logging.info("sn metadata empty")
             return None, None
 
-        sn_name = sn_metadata.true_target.iloc[0]
+        sn_name      = sn_metadata.true_target.iloc[0]
         already_done = sn_id in self.done_ids
         if already_done:
             return sn_name, None

@@ -1,195 +1,583 @@
 #!/usr/bin/env python
-
-import os, sys
-import yaml
-import argparse
-import subprocess
+#
+# Begin run.py refactor,  March 2024 (R,Kessler, H.Qu)
+#
+# Main reason is to make modifications compatible with those in create_heatmaps_job.py
+# that fixes occasionaly heatmap crashes. Also do some re-organization for future
+# maintainability.
+# "scone" task refers to either train or predict mode.
+# "heatmaps" task is the same for train or predict mode.
+#
+#  
+import os, sys, yaml, shutil
+import argparse, subprocess
 from astropy.table import Table
 import numpy as np
+import pandas as pd
 import h5py
 
-SHELLSCRIPT = """
-{init_env}
-cd {scone_path}
-python create_heatmaps_job.py --config_path {config_path} --start {start} --end {end}"""
+from   scone_utils import *
+import scone_utils as util
 
-SCONE_PATH = os.path.dirname(os.path.abspath(__file__)) #TODO: this directory structure might change
-HEATMAPS_PATH = os.path.join(SCONE_PATH, "create_heatmaps") #TODO: this directory structure might change
 
+# code locations
+SCONE_DIR           = os.path.dirname(os.path.abspath(__file__))
+SCONE_HEATMAPS_DIR  = os.path.join(SCONE_DIR, "create_heatmaps") 
+
+# default code names under $SCONE_DIR
+JOBNAME_HEATMAP             = "create_heatmaps_job.py"
+JOBNAME_SCONE               = "model_utils.py"  # train or predict
+
+# sbatch info
+SBATCH_HEATMAPS_WALLTIME    = '4:00:00'
+SBATCH_HEATMAPS_PREFIX      = "create_heatmaps"
+
+SBATCH_SCONE_FILE           = "job.slurm"    # train or predict
+SBATCH_SCONE_LOG            = "output.log"   # idem
+
+SBATCH_WALLTIME_DICT = { MODE_TRAIN:   '20:00:00',  
+                         MODE_PREDICT: '4:00:00'}
+
+SBATCH_JOB_NAME_DICT = { MODE_TRAIN:   f"scone_{MODE_TRAIN}", 
+                         MODE_PREDICT: f"scone_{MODE_PREDICT}" }
+
+# define default memory (GB); applies to all stages. 
+# Can overrwrite with" sbatch_mem:" key in config
+SBATCH_MEM = 32   
+
+# ---------------------------------------
 # HELPER FUNCTIONS
-def write_config(config, config_path):
-    with open(config_path, "w") as f:
-        f.write(yaml.dump(config))
 
-def load_config(config_path):
-    with open(config_path, "r") as cfgfile:
-        config = yaml.load(cfgfile, Loader=yaml.Loader)
-    return config
 
-def load_configs(config_path):
-    config = load_config(config_path)
-    gentype_config = load_config(os.path.join(HEATMAPS_PATH, "default_gentype_to_typename.yml"))["gentype_to_typename"]
-    return config, gentype_config
+def count_FITS_files(input_data_path_list):
+    # open [version].LIST fill and sum number of entries
+    count = 0
+    for data_path in input_data_path_list:
+        version = os.path.basename(data_path)
+        list_file = f"{data_path}/{version}.LIST"
+        with open(list_file,"rt") as l:
+            count += len(l.readlines())
+    return count
 
-# get id list for each sntype
-def get_ids_by_sn_name(metadata_paths, sn_type_id_to_name):
-    sntype_to_ids = {}
-    for metadata_path in metadata_paths:
-        metadata = Table.read(metadata_path, format='fits')
-        sntypes = np.unique(metadata['SNTYPE'])
-        for sntype in sntypes:
-            sn_name = sn_type_id_to_name[sntype]
-            current_value = sntype_to_ids.get(sn_name, np.array([]))
-            sntype_to_ids[sn_name] = np.concatenate((current_value, metadata[metadata['SNTYPE'] == sntype]['SNID'].astype(np.int32)))
-    return sntype_to_ids
+def create_snid_select_file(config):
 
-def write_ids_to_use(ids_list_per_type, fraction_to_use, num_per_type, ids_path):
-    chosen_ids = []
-    for ids_list in ids_list_per_type:
-        num_to_choose = int(num_per_type*fraction_to_use if num_per_type else len(ids_list)*fraction_to_use)
-        chosen_ids = np.concatenate((chosen_ids, np.random.choice(ids_list, num_to_choose, replace=False)))
-        print(f"writing {num_to_choose} ids out of {len(ids_list)} for this type")
+    # Created Apr 2024 by R.Kessler
+    # By default, the sim select file is the SIMGEN-DUMP file for each sim data folder.
+    # If snid_select_files is given in the config input, these are FITRES
+    # files (presumably from LCFIT) to use instead of the SIMGEN-DUMP files.
+    #
+    # Be careful to use is_data/is_sim flags in logic.
 
-    print(f"writing {len(chosen_ids)} ids for {len(ids_list_per_type)} types to {ids_path}")
-    sys.stdout.flush() 
+    IS_MODEL_TRAIN   = (config['mode'] == MODE_TRAIN)
+    IS_MODEL_PREDICT = (config['mode'] == MODE_PREDICT)
 
-    f = h5py.File(ids_path, "w")
-    f.create_dataset("ids", data=chosen_ids, dtype=np.int32)
+    input_data_paths  = config['input_data_paths']
+    snid_select_files = config.setdefault('snid_select_files',None)
+
+    # allowed GENTYPE keys in simgen-dump or LCFIT-output FITRES file
+    KEYLIST_GENTYPE = [ 'GENTYPE', 'SIM_GENTYPE', 'SIM_TYPE_INDEX' ]
+
+    is_data = util.is_data_real(input_data_paths[0])
+    is_sim  = not is_data
+
+    logging.info(f"is_data_real={is_data}   is_data_sim={is_sim}")
+
+    # bail immediately on real data if there is no user-define FITRES file 
+    if snid_select_files is None and is_data :
+        return 0
+
+    # try option user-supplied fitres files:
+    if snid_select_files is None and is_sim :
+        # use default simgen-dump files for sim; if no dump file, it is real data so bail
+        snid_select_files = []
+        for simdir in input_data_paths:
+            version = os.path.basename(simdir)
+            dump_file = f"{simdir}/{version}.DUMP.gz"
+            snid_select_files.append(dump_file)
+
+
+    if is_sim:
+        util.load_SIM_README_DOCANA(config)
+        util.load_SIM_GENTYPE_TO_NAME(config)  # read map of gentype <--> Ia,nonIa  
+        SIM_GENTYPE_TO_CLASS = config['SIM_GENTYPE_TO_CLASS']
+
+    snid_all_list    = []
+    gentype_all_list = [] 
+    for select_file in snid_select_files:
+        if '.gz' in select_file:
+            df = pd.read_csv(select_file, compression='gzip', 
+                             comment="#", delim_whitespace=True)
+        else:
+            df = pd.read_csv(select_file,
+                             comment="#", delim_whitespace=True)
+
+        snid_all_list += df['CID'].tolist()    
+        found_gentype = False        
+        for key_gentype in KEYLIST_GENTYPE:
+            if key_gentype in df.columns:
+                gentype_all_list += df[key_gentype].tolist()
+                found_gentype = True
+                
+        if IS_MODEL_TRAIN and found_gentype is False:
+            msgerr = f'\nERROR: could not find GENTYPE key in \n{select_file}\n' \
+                     f'after checking for {KEYLIST_GENTYPE}'
+            assert False,  msgerr 
+
+    # check for duplicates:
+    n_all    = len(snid_all_list)
+    n_unique = len(set(snid_all_list))
+    if n_unique != n_all:
+        logging.info(f"WARNING: Found {n_unique} unique SNIDs among {n_all} sim SN.")
+
+    # - - - - - - -
+    # check nevt_select and/or prescale options
+    snid_list    = snid_all_list     # default with no prescale
+    gentype_list = gentype_all_list
+
+    if is_sim:
+        nsim_tot_list = n_per_class(gentype_all_list,SIM_GENTYPE_TO_CLASS)
+        print_simtag_info("NSIM", nsim_tot_list)
+
+    if IS_MODEL_TRAIN :
+        key_nevt         = 'nevt_select_heatmaps'
+        nevt_select      = config.setdefault(key_nevt,None)
+        key_ps           = 'prescale_heatmaps'
+        ps_select        = config.setdefault(key_ps,None)
+    else:
+        nevt_select = None
+        ps_select   = None
+
+
+    # - - - - - -  -
+    ps_list    = []
+    if nevt_select:
+        nevt_select_list = nevt_select.split(',')  # e.g., "40000,25000".split(',')
+        for nsimtot, nevt_select in zip(nsim_tot_list,nevt_select_list):
+            ps = int( float(nsimtot) / float(nevt_select) + 0.5)
+            if ps == 0 : ps = 1
+            ps_list.append(ps)
+        print_simtag_info("user-defined nevt_select", nevt_select_list)
+        print_simtag_info("Computed prescale", ps_list)
+    elif ps_select :
+        ps_list     = str(ps_select).split(',')
+        if len(ps_list) == 1 :
+            ps_list.append(ps_list[0])
+        print_simtag_info("user-defined prescale", ps_list)
+
+    else:
+        ps_list = [ 1, 1 ]
+
+    # - - - - - - - -
+    # apply pre-scale if defined. 
+    # start with brute-force (slow) method, and hopefully later find
+    # a more efficiency way.
+    if is_data:
+        snid_list = snid_all_list  # never apply ps to real data
+    else:
+        snid_list_dict = { SIMTAG_Ia: [],  SIMTAG_nonIa: [] }
+        snid_list    = []
+        gentype_list = []
+        ps_list = [ int(ps_list[0]), int(ps_list[1]) ]
+        for snid, gentype in zip(snid_all_list, gentype_all_list):
+            for ps, simtag in zip(ps_list, SIMTAG_LIST):
+                match_type = (SIM_GENTYPE_TO_CLASS[gentype] == simtag) # math Ia or nonIa
+                match_ps   = (int(snid) % ps == 0)
+                if match_type and match_ps:
+                    snid_list.append(snid)
+                    gentype_list.append(gentype)
+                    snid_list_dict[simtag].append(snid)
+
+        n_final_per_type = n_per_class(gentype_list,SIM_GENTYPE_TO_CLASS)
+        print_simtag_info("NSIM(after prescale)", n_final_per_type)
+
+    # - - - - - - -
+    # write snid_list to hdf5 file.
+    # Write separate list for Ia and nonIa to avoid random SNID overlaps
+    # (e.g., Ia SNID matching a nonIa SNID, and vice versa)
+
+    n_select         = len(snid_list)
+    outdir_heatmaps  = config['outdir_heatmaps']
+    snid_hdf5_file = f"{outdir_heatmaps}/{HEATMAPS_SNID_SELECT_FILE}"
+    config['snid_hdf5_file'] = snid_hdf5_file
+
+    logging.info(f"Write {n_select} selected SNIDs to {snid_hdf5_file}")
+    f = h5py.File(snid_hdf5_file, "w")
+
+    # write prescale list [Ia,nonIa] first
+    f.create_dataset("prescales", data = ps_list)
+
+    if is_data:
+        f.create_dataset("ids", data=snid_list, dtype=np.int32)
+    else:
+        # sim
+        for simtag in SIMTAG_LIST :
+            f.create_dataset("ids_" + simtag, data=snid_list_dict[simtag], dtype=np.int32)
+
     f.close()
 
-# do class balancing
-def class_balance(categorical, max_per_type, ids_by_sn_name):
-    abundances = {k:len(v) for k, v in ids_by_sn_name.items()}
-    Ia_string = "Ia" if "Ia" in abundances.keys() else "SNIa"
+    return n_select
+    
 
-    # if categorical:
-    #     num_to_choose = min(abundances.values())
-    #     ids_to_choose_from = list(ids_by_sn_name.values())
-    # else:
-    #     num_Ias = abundances[Ia_string]
-    #     num_non_Ias = sum(abundances.values()) - num_Ias
-    #     num_to_choose = min(num_Ias, num_non_Ias)
+def n_per_class(gentype_list,SIM_GENTYPE_TO_CLASS):
+    n_all = len(gentype_list)
+    n_Ia  = sum(1 for i in gentype_list if SIM_GENTYPE_TO_CLASS[i] == SIMTAG_Ia)
+    n_nonIa    = n_all - n_Ia
+    return [ n_Ia, n_nonIa ]
 
-    #     Ia_ids = ids_by_sn_name[Ia_string]
-    #     non_Ia_ids = [id_ for sntype, ids in ids_by_sn_name.items() for id_ in ids if sntype != Ia_string]
-    #     ids_to_choose_from = [non_Ia_ids, Ia_ids]
-    return min(min(abundances.values()), max_per_type)
+def get_args():
+    parser = argparse.ArgumentParser(description='Run scone on lightcurve data')
 
-# autogenerate some parts of config
-def autofill_scone_config(config):
-    if "input_path" in config and 'metadata_paths' not in config: # write contents of input_path
-        config['metadata_paths'] = [f.path for f in os.scandir(config["input_path"]) if "HEAD.FITS" in f.name]
-        config['lcdata_paths'] = [path.replace("HEAD.FITS", "PHOT.FITS") for path in config['metadata_paths']]
+    msg = "path to config file"
+    parser.add_argument('--config_path', type=str, default=None, help = msg)
 
-    sn_type_id_to_name = config.get("sn_type_id_to_name", GENTYPE_CONFIG)
-    config["sn_type_id_to_name"] = sn_type_id_to_name
+    msg = f"alternate heatmaps subdir (default is '{HEATMAPS_SUBDIR_DEFAULT}')"
+    parser.add_argument('--heatmaps_subdir', type=str, 
+                        default=HEATMAPS_SUBDIR_DEFAULT, help = msg)
 
-    ids_by_sn_name = get_ids_by_sn_name(config["metadata_paths"], sn_type_id_to_name)
-    print(f"sn abundances by type: {[[k,len(v)] for k, v in ids_by_sn_name.items()]}")
-    config['types'] = list(ids_by_sn_name.keys())
+    msg = f"optional sbatch job-name " \
+          f"(for train or predict mode, not for heatmaps)"
+    parser.add_argument('--sbatch_job_name', type=str, 
+                        default=None, help = msg)
 
-    fraction_to_use = 1. / config.get("sim_fraction", 1)
-    class_balanced = config.get("class_balanced", False)
-    categorical = config.get("categorical", False)
-    max_per_type = config.get("max_per_type", 100_000_000)
+    msg = "nosubmit: create sbatch inputs, but do not submit"
+    parser.add_argument("-n", "--nosubmit", help=msg, action="store_true")
 
-    print(f"class balancing {'not' if not class_balanced else ''} applied for {'categorical' if categorical else 'binary'} classification, check 'class_balanced' key if this is not desired")
-    sys.stdout.flush() 
+    msg = "print help for config file keys"
+    parser.add_argument("-H", "--HELP", help=msg, action="store_true")
 
-    if fraction_to_use < 1 or class_balanced: # then write IDs file
-        ids_path = f"{config['heatmaps_path']}/ids.hdf5"
-        num_per_type = class_balance(categorical, max_per_type, ids_by_sn_name) if class_balanced else None
-        write_ids_to_use(ids_by_sn_name.values(), fraction_to_use, num_per_type, ids_path)
-        config["ids_path"] = ids_path
+    ARGS = parser.parse_args()
+    
+    if ARGS.HELP: 
+        print_config_help()
+        sys.exit(0)
 
-    return config
+    # if config_path does not include full path, prepend current directory to path;
+    # needed so that slurm jobs under heatmaps point to config file with full path.
+    if '/' not in ARGS.config_path:
+        ARGS.config_path = CWD + '/' + ARGS.config_path
 
-def format_sbatch_file(idx):
-    start = idx*NUM_FILES_PER_JOB
-    end = min(NUM_PATHS, (idx+1)*NUM_FILES_PER_JOB)
-    ntasks = end - start
+    return ARGS
 
-    shellscript_dict = {
-        "init_env": SCONE_CONFIG["init_env_heatmaps"],
-        "scone_path": SCONE_PATH,
-        "config_path": ARGS.config_path,
-        "start": start,
-        "end": end
+def prepare_sbatch_info(SCONE_CONFIG):
+
+    key_default = 'sbatch_template_default'
+    key         = 'sbatch_template_train'
+    if key not in SCONE_CONFIG:
+        SCONE_CONFIG[key] = SCONE_CONFIG[key_default]
+
+    # check option to override memory
+    key = 'sbatch_mem'
+    if key in SCONE_CONFIG:
+        global SBATCH_MEM
+        SBATCH_MEM = SCONE_CONFIG[key]
+
+    return
+
+
+def get_jobname(config, jobname_base):
+
+    # default is public code under $SCONE_DIR
+    jobname = jobname_base
+
+    # check for scone_dir override based on code path from run.py
+    key_scone_dir_list = [ 'scone_dir', 'SCONE_DIR' ] # allow either case to be safe
+    for key_scone_dir in key_scone_dir_list :
+        if key_scone_dir in config:
+            scone_dir = config[key_scone_dir]
+            jobname = os.path.join(scone_dir, jobname_base)
+
+    return jobname
+
+
+def write_sbatch_for_scone(ARGS, config):
+
+    # Created Mar 6 2024 by R.Kessler
+    # Write scone-sbatch file for model training or predict mode.
+    # 
+    # (formely done by pippin, but moved here since heatmap sbatch is created here)
+
+    mode = config['mode']
+    IS_MODEL_TRAIN   = (mode == MODE_TRAIN)
+    IS_MODEL_PREDICT = (mode == MODE_PREDICT)
+
+    output_path       = config['output_path']
+
+    # few 'train' items are the same for train and predict
+    init_env          = config.setdefault('init_env_train',"")  
+    sbatch_template  = os.path.expandvars(config['sbatch_template_train'])
+
+    sbatch_file      = output_path + '/' + SBATCH_SCONE_FILE
+    sbatch_log_file  = output_path + '/' + SBATCH_SCONE_LOG
+    
+    jobname = get_jobname(config, JOBNAME_SCONE)
+
+    job_string = f"cd {output_path} \n\n" \
+                 f"{init_env} \n\n" \
+                 f"{jobname} " \
+                 f"--config_path  {ARGS.config_path} "
+
+
+    job_string += '\n\n'
+
+    # tack on logic to write SUCCESS or FAILURE to done file
+    done_file  = f"{output_path}/{SBATCH_DONE_FILE_BASE}"
+    done_logic = 'if [ $? -eq 0 ]; then \n' \
+                 f"   echo classify SUCCESS >> {done_file} \n" \
+                 f"else \n" \
+                 f"   echo classify FAILURE >> {done_file} \n" \
+                 f"fi \n"
+
+    job_string += done_logic
+
+
+    sbatch_job_name = config.setdefault('sbatch_job_name',
+                                        SBATCH_JOB_NAME_DICT[mode] )
+    sbatch_walltime = SBATCH_WALLTIME_DICT[mode]
+
+    # - - - - 
+    # check overrides from user or pippin
+    if ARGS.heatmaps_subdir != HEATMAPS_SUBDIR_DEFAULT:
+        job_string += f"--heatmaps_subdir {ARGS.heatmaps_subdir} "
+
+    if ARGS.sbatch_job_name:
+        sbatch_job_name = ARGS.sbatch_job_name  
+
+    # - - - - -
+    REPLACE_KEY_DICT = { 
+        'REPLACE_NAME'          : sbatch_job_name,
+        'REPLACE_MEM'           : str(SBATCH_MEM) + 'GB',
+        'REPLACE_LOGFILE'       : sbatch_log_file,
+        'REPLACE_JOB'           : job_string,
+        'REPLACE_WALLTIME'      : sbatch_walltime,
+        'REPLACE_CPUS_PER_TASK' : '1'
     }
 
-    with open(SCONE_CONFIG['sbatch_header_path'], "r") as f:
-      sbatch_script_tmp = f.read().split("\n")
+    # write new sbatch_file
+    sbatch_key_replace(sbatch_template, sbatch_file, REPLACE_KEY_DICT)
 
-    # Mar 8 2024: RK hack to make unique log file for each create_heatmap
-    sbatch_script = []
-    for line in sbatch_script_tmp:
-        line_out = line
-        if 'job-name' in line: continue
-        if 'output=' in line :
-            suffix   = '_model_config.log'
-            line_out = line.split(suffix)[0] + str(idx) + '_' +  suffix
-        sbatch_script.append(line_out)
+    logging.info(f"Created sbatch {mode} file: {sbatch_file}")
 
-    # xxx mark delete by RK sbatch_script=[line for line in sbatch_script if "job-name" not in line] 
+    return sbatch_file
+    # end write_sbatch_for_scone
 
-    sbatch_script.append(f"#SBATCH --job-name={JOB_NAME.format(**{'index': idx})}")
-    sbatch_script.append(SHELLSCRIPT.format(**shellscript_dict))
 
-    sbatch_file_path = SBATCH_FILE.format(**{"index": idx})
-    with open(sbatch_file_path , "w+") as f:
-        f.write('\n'.join(sbatch_script))
-    print("start: {}, end: {}".format(start, end))
-    print(f"launching job {idx} from {start} to {end}")
-    sys.stdout.flush() 
+def write_sbatch_for_heatmaps(ARGS, config):
 
-    return sbatch_file_path
+    # write sbatch (slurm) files used to create heatmaps
 
+    mode             = config['mode']
+    outdir_heatmaps  = config['outdir_heatmaps']
+    ncore            = config['sbatch_ncore_heatmaps']
+    sbatch_template  = os.path.expandvars(config['sbatch_template_default'])
+
+    ntask_tot        = count_FITS_files(config['input_data_paths'])
+    if ncore > ntask_tot: ncore = ntask_tot  # avoid using CPUs with no task
+    ntask_per_cpu    = int(ntask_tot / ncore) + 1
+
+    # start mem/core at 1GB and keep doubling until we exceed total limit
+    mem_per_core = 1 
+    while ntask_per_cpu*mem_per_core  <= SBATCH_MEM/2 :
+        mem_per_core *= 2
+    str_mem_per_core = f"{mem_per_core}GB"  # convert to string for slurm
+
+    init_env = config.setdefault('init_env_heatmaps',"")
+
+    arg_heatmaps_snid_select = ""    
+    nsnid_select = create_snid_select_file(config)
+    if nsnid_select > 0 :
+        arg_heatmaps_snid_select = f"--hdf5_select_file {HEATMAPS_SNID_SELECT_FILE}"
+
+    # - - - - 
+    sbatch_heatmap_file_list = []
+
+    for i in range(0,ncore):
+        prefix           = f"{SBATCH_HEATMAPS_PREFIX}_{mode}_{i:03d}"
+        sbatch_file      = f"{outdir_heatmaps}/{prefix}.sh"
+        sbatch_log_file  = f"{outdir_heatmaps}/{prefix}.log"
+        jobname = get_jobname(config, JOBNAME_HEATMAP)
+
+        sbatch_heatmap_file_list.append(sbatch_file)
+
+        job_string = f"cd {outdir_heatmaps} \n\n" \
+                     f"{init_env} \n\n" \
+                     f"{jobname} " \
+                     f"--config_path  {ARGS.config_path} " \
+                     f"--slurm_id {i}  --nslurm_tot {ncore} " \
+                     f"{arg_heatmaps_snid_select} "
+
+        if ARGS.heatmaps_subdir != HEATMAPS_SUBDIR_DEFAULT:
+            job_string += f"--heatmaps_subdir {ARGS.heatmaps_subdir} "
+
+        REPLACE_KEY_DICT = { 
+            'REPLACE_NAME'          : prefix,
+            'REPLACE_MEM'           : str_mem_per_core,
+            'REPLACE_LOGFILE'       : sbatch_log_file,
+            'REPLACE_JOB'           : job_string,
+            'REPLACE_WALLTIME'      : SBATCH_HEATMAPS_WALLTIME,
+            'REPLACE_CPUS_PER_TASK'  : str(ntask_per_cpu)
+        }
+
+        # write new sbatch_file
+        sbatch_key_replace(sbatch_template, sbatch_file, REPLACE_KEY_DICT)
+
+    n_file = len(sbatch_heatmap_file_list)
+    logging.info(f"Created {n_file} sbatch files for heatmap creation.")
+
+    return sbatch_heatmap_file_list
+    # end write_sbatch_for_heatmaps
+
+
+def mkdir_heatmaps(ARGS, config):
+    
+    outdir         = SCONE_CONFIG['output_path']    
+    outdir_heatmaps = os.path.join(outdir, ARGS.heatmaps_subdir)
+    SCONE_CONFIG['outdir_heatmaps'] = outdir_heatmaps
+
+    # create new heatmaps directory (clobber old one if it exists)
+    if os.path.exists(outdir_heatmaps):
+        shutil.rmtree(outdir_heatmaps)
+
+    logging.info(f"create output dir for heatmaps: \n\t {outdir_heatmaps} ")
+
+    os.makedirs(outdir_heatmaps)
+
+    return
+
+def sbatch_key_replace(sbatch_template_file, sbatch_out_file, REPLACE_KEY_DICT):
+
+    # Created Mar 6 2024 by R.Kessler
+    # read sbatch_template_files and write lines to new sbatch_out_file,
+    # make substitutions as indicated by REPLACE_DICT.
+
+    with open(sbatch_template_file,"rt") as t:
+        line_template_list = t.readlines()
+
+    with open(sbatch_out_file,"wt") as s:
+
+        for line in line_template_list:
+            line = line.rstrip()  # remove trailing spaces and CR                                 
+            line_out = line
+            # replace keys                                                                        
+            for key_replace, val_replace in REPLACE_KEY_DICT.items():
+                if key_replace in line:
+                    line_out = line.replace(key_replace, val_replace)
+
+            s.write(f"{line_out}\n")
+    return
+    # end sbatch_key_replace
+
+def print_config_help():
+
+    help_config = f"""
+    **** config help menu *** 
+
+# slurm inputs
+sbatch_template_default:      $SBATCH_TEMPLATES/SBATCH_scone_cpu.TEMPLATE
+sbatch_template_train:        $SBATCH_TEMPLATES/SBATCH_scone_cpu.TEMPLATE 
+sbatch_ncore_heatmaps:        10
+sbatch_mem:                   20  # GB : includes all ncore cpus/gpus
+
+
+batch_size:     32     # ??
+
+# training params
+categorical:    false   # ??
+class_balanced: false   # create heatmaps with same NEVT per class (disabled in refactor)
+num_epochs:     400     # ??
+
+# heatmap params
+num_mjd_bins:        180  # number of MJD bins for heatmap
+num_wavelength_bins: 32   # numberr of wave bins for heatmap
+
+nevt_select_heatmaps: 20000,25000  # compute prescales to get Ia,nonIa stats
+
+# pick snid subset from already existing FITRES files, such as from LCFIT
+# Pippin fills this based on OPTS key "OPTIONAL_MASK_FIT:  <MASK>"
+snid_select_files:
+  - fitres file 1 
+  - fitres file 2 
+  - etc ...
+
+prescale_heatmaps:    10    # prescale = 10 for sim-training events for heatmaps
+#      or
+prescale_heatmaps:  20,10   # prescale = 20 for Ia, and 10 for nonIa
+
+
+# specify input data (pippin automatically fills this)
+input_data_paths:
+  - <sim_output_folder1>  # e.g., Ia sims
+  - <sim_output_folder2>  # e.g., contamination sims 
+  etc ... 
+
+# define conda envs
+init_env_train:     source activate scone_cpu_tf2.6  # use gpu env to go faster
+init_env_heatmaps:  source activate scone_cpu_tf2.6
+
+# specify outputs
+
+output_path: <dirname>   # write all output here (clobbers existing folder)
+    
+# for predict mode,
+prob_column_name:  PROB_SCONE  # name of PROB colummn in output predictions.csv 
+
+    """
+
+    print(f"\n{help_config}")
+
+    return
+
+# ==================================
 # START MAIN FUNCTION
+# ==================================
+
 if __name__ == "__main__":
 
-    print(f" full command: {' '.join(sys.argv)} \n")
-    sys.stdout.flush() 
+    util.setup_logging()
 
-    parser = argparse.ArgumentParser(description='create heatmaps from lightcurve data')
-    parser.add_argument('--config_path', type=str, help='absolute or relative path to your yml config file, i.e. "/user/files/create_heatmaps_config.yml"')
-    ARGS = parser.parse_args()
+    util.print_job_command()
 
-    SCONE_CONFIG, GENTYPE_CONFIG = load_configs(ARGS.config_path)
-    OUTPUT_DIR = SCONE_CONFIG["heatmaps_path"]
+    ARGS = get_args()
 
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+    key_expandvar_list = [ 'output_path', 'input_data_paths', 'snid_select_files',
+                           'sbatch_template_default', 'sbatch_template_train' ]
+    SCONE_CONFIG  = util.load_config_expandvars(ARGS.config_path, key_expandvar_list)
 
-    SCONE_CONFIG = autofill_scone_config(SCONE_CONFIG)
-    write_config(SCONE_CONFIG, ARGS.config_path)
+    # define output for heatmaps
+    mkdir_heatmaps(ARGS, SCONE_CONFIG)
 
-    model_job_path = SCONE_CONFIG["model_sbatch_job_path"]
-    model_sbatch_cmd = ["sbatch"]
+    # define scone code location based on location of run.py
+    scone_dir = os.path.dirname(sys.argv[0])
+    if len(scone_dir) > 0:
+        SCONE_CONFIG['scone_dir'] = scone_dir
 
-    if 'sbatch_header_path' in SCONE_CONFIG and os.path.exists(SCONE_CONFIG.get('sbatch_header_path', "")): # make heatmaps
-      print("sbatch header path found: {SCONE_CONFIG['sbatch_header_path']}, making heatmaps")
-      JOB_NAME = f"{SCONE_CONFIG.get('job_base_name', 'scone_create_heatmaps')}" + "__{index}"
-      SBATCH_FILE = os.path.join(OUTPUT_DIR, "create_heatmaps__{index}.sh")
+    # - - - - 
+    # write sbatch files for heatmaps and for training:
+    prepare_sbatch_info(SCONE_CONFIG)
+    sbatch_heatmap_file_list = write_sbatch_for_heatmaps(ARGS, SCONE_CONFIG)
+    sbatch_scone_file        = write_sbatch_for_scone(ARGS, SCONE_CONFIG)
 
-      NUM_PATHS = len(SCONE_CONFIG["lcdata_paths"])
-      NUM_FILES_PER_JOB= 20 # haswell has 32 physical cores
+    # launch each heatmap job into slurm
+    if ARGS.nosubmit:
+        sys.exit(f"\n\t !!! Skip job launch. Bye bye !!!\n ")
 
-      print(f"num simultaneous jobs: {NUM_FILES_PER_JOB}")
-      print(f"num paths: {NUM_PATHS}")
-      sys.stdout.flush() 
+    # - - -  launch jobs - - - - - -
+    logging.info(f"Launch heatmap-generation jobs into slurm.")
+    jid_list = []
+    for sbatch_file in sbatch_heatmap_file_list:
+        out = subprocess.run(["sbatch", "--parsable", sbatch_file], 
+                             capture_output=True)
+        jid_list.append(out.stdout.decode('utf-8').strip())
 
-      jids = []
-      for j in range(int(NUM_PATHS/NUM_FILES_PER_JOB)+1):
-          sbatch_file = format_sbatch_file(j)
-          out = subprocess.run(["sbatch", "--parsable", sbatch_file], capture_output=True)
-          jids.append(out.stdout.decode('utf-8').strip())
+    # prepare model-training/predict command to run after all create_heatmaps jobs complete
+    scone_sbatch_cmd = ['sbatch' ]
+    scone_sbatch_cmd.append(f"--dependency=afterok:{':'.join(jid_list)}")
+    scone_sbatch_cmd.append(sbatch_scone_file)
 
-      print(jids)
-      sys.stdout.flush() 
-      model_sbatch_cmd.append(f"--dependency=afterok:{':'.join(jids)}")
+    mode = SCONE_CONFIG['mode']
+    logging.info(f"Launch {mode} job with command: \n{scone_sbatch_cmd}\n")
+    subprocess.run(scone_sbatch_cmd)
 
-    model_sbatch_cmd.append(model_job_path)
-    print(f"launching model training job with cmd {model_sbatch_cmd}")
-    sys.stdout.flush() 
+    logging.info(f"")
+    logging.info(f"Finished launching heatmap + {mode} jobs; wait for jobs to finish.\n")
 
-    subprocess.run(model_sbatch_cmd)
+    # ==== END ===
