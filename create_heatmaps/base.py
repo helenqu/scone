@@ -205,11 +205,6 @@ class CreateHeatmapsBase(abc.ABC):
                     sn_metadata, sn_lcdata, mjd_range = sn_data
                     wave = [self.band_to_wave[elem] for elem in sn_lcdata['passband']]
 
-                    #if sn_id == 1246438:
-                    #    print(f"\n xxx lc dump for sn_id = {sn_id}")
-                    #    print(f" xxx sn_lcdata = \n{sn_lcdata} \n")
-                    #    sys.stdout.flush() 
-
                     gp = build_gp(20, sn_lcdata, wave)
                     if gp == None:
                         self._remove(sn_name)
