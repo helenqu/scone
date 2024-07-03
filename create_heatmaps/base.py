@@ -205,6 +205,11 @@ class CreateHeatmapsBase(abc.ABC):
                     sn_metadata, sn_lcdata, mjd_range = sn_data
                     wave = [self.band_to_wave[elem] for elem in sn_lcdata['passband']]
 
+                    #if sn_id == 1246438:
+                    #    print(f"\n xxx lc dump for sn_id = {sn_id}")
+                    #    print(f" xxx sn_lcdata = \n{sn_lcdata} \n")
+                    #    sys.stdout.flush() 
+
                     gp = build_gp(20, sn_lcdata, wave)
                     if gp == None:
                         self._remove(sn_name)
@@ -386,8 +391,13 @@ class CreateHeatmapsBase(abc.ABC):
                 return sn_name, None
             sn_lcdata = sn_lcdata[mask]
 
-        sn_lcdata.add_row([min(sn_lcdata['mjd'])-100, 0, 0, expected_filters[2]])
-        sn_lcdata.add_row([max(sn_lcdata['mjd'])+100, 0, 0, expected_filters[2]])
+        # extend light curve to include very early & late epoch with zero flux.
+        # Beware to pass flux_err > 0 to avoid divide-by-zero in build_gp.
+        mjd_early = min(sn_lcdata['mjd']) - 100
+        mjd_late  = max(sn_lcdata['mjd']) + 100
+        flux = 0.0;  flux_err = 0.1;  band=expected_filters[2]
+        sn_lcdata.add_row( [ mjd_early, flux, flux_err, band ] )
+        sn_lcdata.add_row( [ mjd_late,  flux, flux_err, band ] )
 
         return sn_name, sn_metadata, sn_lcdata, mjd_range
 
