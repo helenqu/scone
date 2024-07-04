@@ -164,15 +164,15 @@ def build_gp(guess_length_scale, sn_data, bands):
     width in the wavelength direction is fixed. We fit for the kernel width
     in the time direction"""
 
-    mjdall = sn_data['mjd']
-    fluxall = sn_data['flux']
+    mjdall      = sn_data['mjd']
+    fluxall     = sn_data['flux']
     flux_errall = sn_data['flux_err']
 
     #Want to compute the scale factor that we will use...
-    signal_to_noises = np.abs(fluxall) / np.sqrt(flux_errall ** 2 + (1e-2 * np.max(fluxall)) ** 2)
+    signal_to_noises = np.abs(fluxall) / np.sqrt(flux_errall**2 + (0.01 * np.max(fluxall))**2)
     scale = np.abs(fluxall[np.argmax(signal_to_noises)])
 
-    kernel = (0.5 * scale) ** 2 * kernels.Matern32Kernel([guess_length_scale ** 2, 6000 ** 2], ndim=2)
+    kernel = (0.5 * scale)**2 * kernels.Matern32Kernel([guess_length_scale**2, 6000**2], ndim=2)
 
     gp = george.GP(kernel)
     guess_parameters = gp.get_parameter_vector()

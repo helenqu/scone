@@ -386,8 +386,13 @@ class CreateHeatmapsBase(abc.ABC):
                 return sn_name, None
             sn_lcdata = sn_lcdata[mask]
 
-        sn_lcdata.add_row([min(sn_lcdata['mjd'])-100, 0, 0, expected_filters[2]])
-        sn_lcdata.add_row([max(sn_lcdata['mjd'])+100, 0, 0, expected_filters[2]])
+        # extend light curve to include very early & late epoch with zero flux.
+        # Beware to pass flux_err > 0 to avoid divide-by-zero in build_gp.
+        mjd_early = min(sn_lcdata['mjd']) - 100
+        mjd_late  = max(sn_lcdata['mjd']) + 100
+        flux = 0.0;  flux_err = 0.1;  band=expected_filters[2]
+        sn_lcdata.add_row( [ mjd_early, flux, flux_err, band ] )
+        sn_lcdata.add_row( [ mjd_late,  flux, flux_err, band ] )
 
         return sn_name, sn_metadata, sn_lcdata, mjd_range
 
