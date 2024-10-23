@@ -174,7 +174,7 @@ def get_sim_readme_yaml(simdir):
     # Created Apr 2024 by R.Kessler
     # for input sim dir, return contents of readme-yaml file
     version     = os.path.basename(simdir)
-    readme_file = f"{simdir}/{version}.README"
+    readme_file = os.path.expandvars(f"{simdir}/{version}.README")
     contents    = load_config_expandvars(readme_file, [] )
     return contents
 

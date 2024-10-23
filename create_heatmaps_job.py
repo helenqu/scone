@@ -2,6 +2,7 @@
 #
 #
 # Feb 29 2024 RK - begin major refactor (see github issue...)
+# Oct 21 2024 RK - allow gzip or unzipped data (PHOT and HEAD files)
 
 import os, sys, yaml, logging, glob
 import argparse
@@ -143,7 +144,9 @@ def load_lcdata_metadata(config):
             with open(list_file,"rt") as l:
                 meta_list = l.readlines()
                 for meta in meta_list:
-                    meta   = data_path + '/' + meta.rstrip() + '.gz'
+                    meta    = data_path + '/' + meta.rstrip()  
+                    meta_gz = meta + '.gz'  
+                    if os.path.exists(meta_gz):  meta = meta_gz
                     lcdata = meta.replace("HEAD.FITS", "PHOT.FITS")
                     config[key_meta].append(meta)
                     config[key_lcdata].append(lcdata)

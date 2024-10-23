@@ -92,9 +92,14 @@ def create_snid_select_file(config):
         snid_select_files = []
         for simdir in input_data_paths:
             version = os.path.basename(simdir)
-            dump_file = f"{simdir}/{version}.DUMP.gz"
-            snid_select_files.append(dump_file)
-
+            dump_file    = f"{simdir}/{version}.DUMP"
+            dump_file_gz = f"{dump_file}.gz"
+            if os.path.exists(dump_file):
+                snid_select_files.append(dump_file)
+            elif if os.path.exists(dump_file_gz):
+                snid_select_files.append(dump_file_gz)
+            else: 
+                sys.exit(f"\n cannot select CIDs for sim because there is no DUMP file\n\t {dump_file}")
 
     if is_sim:
         util.load_SIM_README_DOCANA(config)

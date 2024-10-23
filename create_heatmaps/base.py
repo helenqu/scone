@@ -242,7 +242,7 @@ class CreateHeatmapsBase(abc.ABC):
                     self._done(sn_name, sn_id)
                     
             # - - - -
-            logging.info(f"job {self.index}: Finsished processing " \
+            logging.info(f"job {self.index}: Finished processing " \
                          f"{n_lc_write} of {n_lc_read} light curves.")
 
             # - - - - - 
