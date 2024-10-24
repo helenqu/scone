@@ -96,7 +96,7 @@ def create_snid_select_file(config):
             dump_file_gz = f"{dump_file}.gz"
             if os.path.exists(dump_file):
                 snid_select_files.append(dump_file)
-            elif if os.path.exists(dump_file_gz):
+            elif os.path.exists(dump_file_gz):
                 snid_select_files.append(dump_file_gz)
             else: 
                 sys.exit(f"\n cannot select CIDs for sim because there is no DUMP file\n\t {dump_file}")
