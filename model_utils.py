@@ -248,6 +248,10 @@ class SconeClassifier():
         outdir_train_model = f"{self.output_path}/trained_model"
         model.save(outdir_train_model)
 
+        # Oct 2024 RK - make sure output model has g+rw permissions
+        cmd_chmod = f"chmod -R g+rw {outdir_train_model}"
+        os.system(cmd_chmod)
+
         # Jun 2024 RK - write mean filter wavelengths to ensure these values
         #               are the same in predict mode.
         self.write_filter_wavelengths(outdir_train_model)  # Jun 2024, RK
