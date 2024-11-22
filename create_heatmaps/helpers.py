@@ -1,5 +1,4 @@
 #
-# Apr 2 2024 RK - replace fragile 'SNTYPE' with 'SIM_GENTYPE'
 
 import os, sys, logging
 import tensorflow as tf
@@ -154,6 +153,12 @@ def read_fits(fname, sn_type_id_to_name, survey_from_config, drop_separators=Fal
                       "FLUXCAL": "flux", "FLUXCALERR": "flux_err"}
     for old_colname, new_colname in rename_columns.items():
         lcdata.rename_column(old_colname, new_colname)
+
+    # Nov 22 2024 RK - store last char only for filter since there was a
+    # recent sim change to write out entire filter name; 
+    # e.g previous 'z' is now written as 'LSST-z'          .xyz
+    lcdata['passband']  = [ s.strip()[-1:] for s in lcdata['passband']]  
+    #sys.exit(f"\n xxx modified lcdata = \n{lcdata}")
 
     return df_header, lcdata, survey
 
