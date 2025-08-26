@@ -124,8 +124,14 @@ def read_fits(fname, sn_type_id_to_name, survey_from_config, drop_separators=Fal
     if drop_separators:
         lcdata = lcdata[lcdata['MJD'] != -777.000]
 
-    KEY_SIM_GENTYPE = 'SIM_GENTYPE'
+    KEY_SIM_GENTYPE_LIST = [ 'SIM_GENTYPE', 'SIM_TYPE_INDEX' ]
+    KEY_SIM_GENTYPE      = 'xxx'
     KEY_SNTYPE      = 'SNTYPE'   # always there for real data
+
+    for key in KEY_SIM_GENTYPE_LIST:  # Aug 22 2025 : check legacy SIM_TYPE_INDEX
+        if key in df_header.columns:
+            KEY_SIM_GENTYPE = key
+
     is_sim = KEY_SIM_GENTYPE in df_header.columns
 
     head_col_list = ["SNID", "PEAKMJD", "REDSHIFT_FINAL", "REDSHIFT_FINAL_ERR", "MWEBV"]

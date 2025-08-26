@@ -1,5 +1,7 @@
 # base program for create_heatmaps
-
+#
+# Aug 22 2025: fix get_hdf5_ids_name() to be more robust and not rely on SNIaMODEL in FITS file name
+#
 import numpy as np
 import os, sys, logging
 import pandas as pd
@@ -96,15 +98,17 @@ class CreateHeatmapsBase(abc.ABC):
         self.metadata, self.lcdata, survey = \
                 read_fits(self.lcdata_path, self.sn_type_id_to_name, self.survey)
 
-        #xxx metadata_ids = self.metadata[self.metadata.true_target.isin(self.types)].object_id
         if self.IS_DATA_REAL:
             metadata_ids = self.metadata.object_id # take everything for real data
+            true_target  = None
         else:
             metadata_ids = self.metadata[self.metadata.true_target.isin(self.types)].object_id
+            true_target  = self.metadata.true_target.iloc[0]  # Aug 22 2025
 
         self.lcdata.add_index('object_id')
         self.lcdata['passband'] = [flt.strip() for flt in self.lcdata['passband']]
-        self.lcdata_ids = np.intersect1d(self.lcdata['object_id'], metadata_ids)
+        self.lcdata_ids  = np.intersect1d(self.lcdata['object_id'], metadata_ids)
+        self.true_target = true_target  
 
         # survey info
         if self.band_to_wave is None:
@@ -121,8 +125,9 @@ class CreateHeatmapsBase(abc.ABC):
             ids_name     = self.get_hdf5_ids_name()
             self.ps_list = ids_file['prescales'][()]  # recover prescales used to select [Ia,nonIa]
             self.ids     = ids_file[ids_name][()]     # turn this into a numpy array
+            n_ids        = len(self.ids)
             logging.info(f"  Select-Prescale list [Ia,nonIa] = {self.ps_list}")
-            logging.info(f"  Example selected SNIDs:  {self.ids[0:4]}")
+            logging.info(f"  Example selected {ids_name}:  {self.ids[0:4]} ... of {n_ids}")
             ids_file.close()
         else:
             self.ps_list = [ 1, 1]
@@ -143,7 +148,9 @@ class CreateHeatmapsBase(abc.ABC):
         # Return name of snid set in hdf5 file.
         # For legacy and real data, name is "ids".
         # For sim, name is ids_Ia or ids_nonIa (to avoid random SNID overlaps)
-    
+        #
+        # Aug 22 2025: fix logic to be more robust
+
         ids_base_name = "ids"
 
         if self.LEGACY:
@@ -153,11 +160,14 @@ class CreateHeatmapsBase(abc.ABC):
         if self.IS_DATA_REAL:
             ids_name = ids_base_name
         else:
-            # ?? simtag = SIMTAG_Ia  if "SNIaMODEL" in self.lcdata_path    else simtag = SIMTAG_nonIa
-            if "SNIaMODEL" in self.lcdata_path :  
-                simtag = SIMTAG_Ia 
-            else:                                 
-                simtag = SIMTAG_nonIa 
+            simtag = self.true_target
+
+            # xxx mark delete Aug 22 2025 xxxxxx
+            #if "SNIaMODEL" in self.lcdata_path :  
+            #    simtag = SIMTAG_Ia 
+            #else:                                 
+            #    simtag = SIMTAG_nonIa 
+            # xxxxxxxxx end mark 
 
             ids_name = ids_base_name + '_'  + simtag        # ids_Ia or ids_nonIa
 
@@ -231,7 +241,7 @@ class CreateHeatmapsBase(abc.ABC):
                         print(f" xxx wave = {wave}")
                         print(f" xxx sn_data = {sn_data}")
                         sys.stdout.flush() 
-                        print(f" xxx heatmap = \n{heatmap}\n")  # .xyz
+                        print(f" xxx heatmap = \n{heatmap}\n")  
                         sys.stdout.flush() 
 
 
