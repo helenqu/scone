@@ -205,7 +205,7 @@ def create_snid_select_file(config):
     snid_hdf5_file = f"{outdir_heatmaps}/{HEATMAPS_SNID_SELECT_FILE}"
     config['snid_hdf5_file'] = snid_hdf5_file
 
-    logging.info(f"Write {n_select} selected SNIDs to {snid_hdf5_file}")
+    logging.info(f"Prepare to write {n_select} selected SNIDs to {snid_hdf5_file}")
     f = h5py.File(snid_hdf5_file, "w")
 
     # write prescale list [Ia,nonIa] first
@@ -216,7 +216,9 @@ def create_snid_select_file(config):
     else:
         # sim
         for simtag in SIMTAG_LIST :
-            f.create_dataset("ids_" + simtag, data=snid_list_dict[simtag], dtype=np.int32)
+            snid_list = snid_list_dict[simtag]
+            logging.info(f"\t write {len(snid_list)} SNIDs for {simtag}")
+            f.create_dataset("ids_" + simtag, data=snid_list, dtype=np.int32)
 
     f.close()
 
