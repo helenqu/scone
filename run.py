@@ -8,10 +8,11 @@
 # "scone" task refers to either train or predict mode.
 # "heatmaps" task is the same for train or predict mode.
 #
-# Aug 26 2025 RK - if there are multiple snid_select_files (i.e., Ia and CC),
-# check that VERSION_PHOTOMETRY key in each select_file is a valie sim-version;
-# drop extra snid_select_files to avoid false duplicates.
-#
+# Aug 26 2025 RK -
+#    if there are multiple snid_select_files (i.e., Ia and CC),
+#    check that VERSION_PHOTOMETRY key in each select_file is a valid sim-version;
+#    skip invalid snid_select_files to avoid false duplicates.
+#    See new method use_select_file(...)
 
 import os, sys, yaml, shutil, gzip
 import argparse, subprocess
