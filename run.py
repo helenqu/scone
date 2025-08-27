@@ -8,8 +8,12 @@
 # "scone" task refers to either train or predict mode.
 # "heatmaps" task is the same for train or predict mode.
 #
-#  
-import os, sys, yaml, shutil
+# Aug 26 2025 RK - if there are multiple snid_select_files (i.e., Ia and CC),
+# check that VERSION_PHOTOMETRY key in each select_file is a valie sim-version;
+# drop extra snid_select_files to avoid false duplicates.
+#
+
+import os, sys, yaml, shutil, gzip
 import argparse, subprocess
 from astropy.table import Table
 import numpy as np
@@ -91,7 +95,7 @@ def create_snid_select_file(config):
         # use default simgen-dump files for sim; if no dump file, it is real data so bail
         snid_select_files = []
         for simdir in input_data_paths:
-            version = os.path.basename(simdir)
+            version      = os.path.basename(simdir)
             dump_file    = f"{simdir}/{version}.DUMP"
             dump_file_gz = f"{dump_file}.gz"
             if os.path.exists(dump_file):
@@ -101,14 +105,25 @@ def create_snid_select_file(config):
             else: 
                 sys.exit(f"\n cannot select CIDs for sim because there is no DUMP file\n\t {dump_file}")
 
+    sim_version_list = []
     if is_sim:
         util.load_SIM_README_DOCANA(config)
         util.load_SIM_GENTYPE_TO_NAME(config)  # read map of gentype <--> Ia,nonIa  
         SIM_GENTYPE_TO_CLASS = config['SIM_GENTYPE_TO_CLASS']
+        for simdir in input_data_paths:
+            sim_version_list.append(os.path.basename(simdir))  # Aug 26 2025
 
+    logging.info("Begin reading snid_select_files: ")
     snid_all_list    = []
     gentype_all_list = [] 
     for select_file in snid_select_files:
+        select_file = os.path.expandvars(select_file)  # Aug 26 2025
+
+        if not use_select_file(is_sim, select_file, sim_version_list):
+            logging.info(f"Skip snid_select_file that doesn't match sim versions: \n" \
+                         f"{select_file}")
+            continue
+        
         if '.gz' in select_file:
             df = pd.read_csv(select_file, compression='gzip', 
                              comment="#", delim_whitespace=True)
@@ -116,6 +131,9 @@ def create_snid_select_file(config):
             df = pd.read_csv(select_file,
                              comment="#", delim_whitespace=True)
 
+        n_df = len(df)
+        logging.info(f"Read {n_df} rows from snid_select_file {select_file}")
+        
         snid_all_list += df['CID'].tolist()    
         found_gentype = False        
         for key_gentype in KEYLIST_GENTYPE:
@@ -127,7 +145,7 @@ def create_snid_select_file(config):
             msgerr = f'\nERROR: could not find GENTYPE key in \n{select_file}\n' \
                      f'after checking for {KEYLIST_GENTYPE}'
             assert False,  msgerr 
-
+    
     # check for duplicates:
     n_all    = len(snid_all_list)
     n_unique = len(set(snid_all_list))
@@ -223,7 +241,48 @@ def create_snid_select_file(config):
     f.close()
 
     return n_select
+
+
+def use_select_file(is_sim, select_file, sim_version_list):
+
+    # For sims, read VERSION_PHOTOMETRY from comment at top of select_file
+    # and make sure that this version is one of the sims.
+    # Assumes SNANA-formatted FITRES file is used for snid_select_file.
     
+    # always return true for real data
+    if not is_sim: return True
+
+    # open select_file for reading
+    if '.gz' in select_file:
+        f = gzip.open(select_file,"rt")
+    else:
+        f = open(select_file,"rt")
+
+    NLINE_ABORT = 10
+    KEY = "VERSION_PHOTOMETRY:"
+    for i, line in enumerate(f):
+        if i >= NLINE_ABORT:
+            msgerr = f'\n\nERROR: could not find {KEY} key in first {i} lines\n' \
+                     f'in select file {select_file}'
+            assert False,  msgerr 
+            
+        if KEY in line:
+            wdlist = line.split()
+            j      = wdlist.index(KEY)
+            select_version = wdlist[j+1]
+            select_version_list = select_version.split(',') # could be comma sep list
+            break
+        
+    # - - - - - - - - - - - -
+    use = False
+    for select_version in select_version_list:
+        if select_version in sim_version_list:
+            use = True
+            
+    f.close()
+        
+    return use
+
 
 def n_per_class(gentype_list,SIM_GENTYPE_TO_CLASS):
     n_all = len(gentype_list)
