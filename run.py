@@ -33,8 +33,11 @@ SCONE_HEATMAPS_DIR  = os.path.join(SCONE_DIR, "create_heatmaps")
 JOBNAME_HEATMAP             = "create_heatmaps_job.py"
 JOBNAME_SCONE               = "model_utils.py"  # train or predict
 
-# sbatch info
-SBATCH_HEATMAPS_WALLTIME    = '4:00:00'
+# hard-wire max wall time, but should be a config input parameter;
+# eventually pippin should select wall time based on biascor or sim data.
+# xxx mark delete SBATCH_HEATMAPS_WALLTIME    = '4:00:00'
+SBATCH_HEATMAPS_WALLTIME    = '10:00:00'   # Aug 29 2025: more wall time for biascor
+
 SBATCH_HEATMAPS_PREFIX      = "create_heatmaps"
 
 SBATCH_SCONE_FILE           = "job.slurm"    # train or predict
