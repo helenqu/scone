@@ -13,6 +13,7 @@
 #    check that VERSION_PHOTOMETRY key in each select_file is a valid sim-version;
 #    skip invalid snid_select_files to avoid false duplicates.
 #    See new method use_select_file(...)
+# Aug 29 2025 RK - fix rubble from Aug 26; always use a SIMGEN-DUMP file
 
 import os, sys, yaml, shutil, gzip
 import argparse, subprocess
@@ -94,7 +95,7 @@ def create_snid_select_file(config):
     if snid_select_files is None and is_data :
         return 0
 
-    # try option user-supplied fitres files:
+    # if there are no user-defined snid_select_files, then use simgen-dump file by default
     if snid_select_files is None and is_sim :
         # use default simgen-dump files for sim; if no dump file, it is real data so bail
         snid_select_files = []
@@ -255,6 +256,10 @@ def use_select_file(is_sim, select_file, sim_version_list):
     
     # always return true for real data
     if not is_sim: return True
+
+    # if simgen-dump file, always return True
+    suffix = select_file.split('.')[1]
+    if 'DUMP' in suffix: return True
 
     # open select_file for reading
     if '.gz' in select_file:
