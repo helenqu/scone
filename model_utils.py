@@ -84,9 +84,8 @@ class SconeClassifier():
         """Setup debug modes based on debug_flag value.
         
         Debug flag meanings:
-        0    = Production mode (default)
+        0    = Production mode (default) - uses legacy retrieve_data
         1    = Verbose logging
-        900  = Use legacy retrieve_data
         901  = Use refactored retrieve_data with basic logging
         902  = Use refactored retrieve_data with verbose logging
         1000+ = Reserved for future debug modes
@@ -96,17 +95,16 @@ class SconeClassifier():
         self.DEBUG_MODES = {
             'PRODUCTION': 0,
             'VERBOSE': 1,
-            'LEGACY_RETRIEVE': 900,
             'REFAC_RETRIEVE': 901,
             'REFAC_RETRIEVE_VERBOSE': 902,
         }
         
         # Apply debug settings
-        if self.debug_flag == self.DEBUG_MODES['VERBOSE']:
+        if self.debug_flag == self.DEBUG_MODES['PRODUCTION']:
+            logging.info("Debug Mode: Production mode - using LEGACY retrieve_data")
+        elif self.debug_flag == self.DEBUG_MODES['VERBOSE']:
             self.verbose_data_loading = True
             logging.info("Debug Mode: Verbose logging enabled")
-        elif self.debug_flag == self.DEBUG_MODES['LEGACY_RETRIEVE']:
-            logging.info("Debug Mode: Using LEGACY retrieve_data")
         elif self.debug_flag == self.DEBUG_MODES['REFAC_RETRIEVE']:
             logging.info("Debug Mode: Using REFACTORED retrieve_data")
         elif self.debug_flag == self.DEBUG_MODES['REFAC_RETRIEVE_VERBOSE']:
@@ -253,12 +251,17 @@ class SconeClassifier():
             self.log_memory_usage("After loading raw dataset")
             
             # Choose retrieve_data implementation based on debug flag
-            if self.debug_flag == self.DEBUG_MODES['LEGACY_RETRIEVE']:
+            if self.debug_flag == self.DEBUG_MODES['PRODUCTION']:
+                # Default (0) uses legacy implementation
                 logging.info("Using LEGACY retrieve_data implementation")
                 dataset, size = self._retrieve_data_legacy(raw_dataset)
-            else:
-                # Use refactored implementation for all other cases
+            elif self.debug_flag in [self.DEBUG_MODES['REFAC_RETRIEVE'], self.DEBUG_MODES['REFAC_RETRIEVE_VERBOSE']]:
+                # Flags 901 and 902 use refactored implementation
                 dataset, size = self._retrieve_data(raw_dataset)
+            else:
+                # Any other flag defaults to legacy for safety
+                logging.info("Using LEGACY retrieve_data implementation (default)")
+                dataset, size = self._retrieve_data_legacy(raw_dataset)
             
             self.log_memory_usage("After processing dataset setup")
             logging.info(f"Running scone prediction on full dataset of {size} examples")
@@ -566,11 +569,13 @@ class SconeClassifier():
         raw_dataset = self._load_dataset()
         
         # Choose retrieve_data implementation based on debug flag
-        if hasattr(self, 'DEBUG_MODES') and self.debug_flag == self.DEBUG_MODES['LEGACY_RETRIEVE']:
+        if hasattr(self, 'DEBUG_MODES') and self.debug_flag in [self.DEBUG_MODES['REFAC_RETRIEVE'], self.DEBUG_MODES['REFAC_RETRIEVE_VERBOSE']]:
+            logging.info("Using REFACTORED retrieve_data implementation for training")
+            dataset, size = self._retrieve_data(raw_dataset)
+        else:
+            # Default (0) and any other flag uses legacy
             logging.info("Using LEGACY retrieve_data implementation for training")
             dataset, size = self._retrieve_data_legacy(raw_dataset)
-        else:
-            dataset, size = self._retrieve_data(raw_dataset)
         
         dataset = dataset.shuffle(size)
 
@@ -715,9 +720,8 @@ def get_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Debug flag values:
-  0    Production mode (default)
+  0    Production mode (default) - uses legacy retrieve_data
   1    Verbose logging
-  900  Use legacy retrieve_data implementation
   901  Use refactored retrieve_data 
   902  Use refactored retrieve_data with verbose logging
 
