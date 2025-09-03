@@ -16,6 +16,8 @@ import time
 import json
 import argparse
 import atexit
+import time
+import psutil
 
 from   data_utils  import *
 from   scone_utils import *   # RK - should merge with data_utils ?
@@ -36,6 +38,7 @@ class SconeClassifier():
     def __init__(self, config):
         self.scone_config = config  
         self.seed = config.get("seed", 42)
+        self.process = psutil.Process()
 
         self.output_path    = config['output_path']
         self.heatmaps_paths = config['heatmaps_paths'] if 'heatmaps_paths' in config else config['heatmaps_path'] # #TODO(6/21/23): eventually remove, for backwards compatibility
@@ -65,12 +68,50 @@ class SconeClassifier():
         self.class_balanced = config.get('class_balanced', True)
         self.external_trained_model = config.get('trained_model')
         self.prob_column_name = config.setdefault('prob_column_name', "PROB_SCONE") # RK
+        self.verbose_data_loading = config.get('verbose_data_loading', False)
+        
+        # Debug flag system for development/testing
+        self.debug_flag = config.get('debug_flag', 0)
+        self._setup_debug_modes()
 
         self.LEGACY = 'sim_fraction' in config
         self.REFAC  = not self.LEGACY
         logging.info(f"LEGACY code: {self.LEGACY}")
 
         return
+    
+    def _setup_debug_modes(self):
+        """Setup debug modes based on debug_flag value.
+        
+        Debug flag meanings:
+        0    = Production mode (default) - uses legacy retrieve_data
+        1    = Verbose logging
+        901  = Use refactored retrieve_data with basic logging
+        902  = Use refactored retrieve_data with verbose logging
+        1000+ = Reserved for future debug modes
+        """
+        
+        # Define debug mode constants for clarity
+        self.DEBUG_MODES = {
+            'PRODUCTION': 0,
+            'VERBOSE': 1,
+            'REFAC_RETRIEVE': 901,
+            'REFAC_RETRIEVE_VERBOSE': 902,
+        }
+        
+        # Apply debug settings
+        if self.debug_flag == self.DEBUG_MODES['PRODUCTION']:
+            logging.info("Debug Mode: Production mode - using LEGACY retrieve_data")
+        elif self.debug_flag == self.DEBUG_MODES['VERBOSE']:
+            self.verbose_data_loading = True
+            logging.info("Debug Mode: Verbose logging enabled")
+        elif self.debug_flag == self.DEBUG_MODES['REFAC_RETRIEVE']:
+            logging.info("Debug Mode: Using REFACTORED retrieve_data")
+        elif self.debug_flag == self.DEBUG_MODES['REFAC_RETRIEVE_VERBOSE']:
+            self.verbose_data_loading = True
+            logging.info("Debug Mode: Using REFACTORED retrieve_data with verbose logging")
+        elif self.debug_flag > 0:
+            logging.info(f"Debug Mode: Custom debug flag {self.debug_flag}")
 
     def write_summary_file(self, history):
 
@@ -194,6 +235,7 @@ class SconeClassifier():
 
         self.t_start = time.time()
         self.trained_model = None
+        self.log_memory_usage("Initial startup")
 
         if self.external_trained_model:
             logging.info(f"loading trained model found at {self.external_trained_model}")
@@ -202,13 +244,38 @@ class SconeClassifier():
         if self.mode == MODE_TRAIN:
             self.train_set, self.val_set, self.test_set = self._split_and_retrieve_data()
             self.trained_model, history = self.train()
-            history = history.history
-        else:         # mode == predict
-            dataset, size = self._retrieve_data(self._load_dataset())
-            logging.info(f"running scone prediction on full dataset of {size} examples")
-            predict_dict, acc = self.predict(dataset)            
+            history = history.history    
+        elif self.mode == MODE_PREDICT:
+            self.log_memory_usage("Before loading dataset")
+            raw_dataset = self._load_dataset()
+            self.log_memory_usage("After loading raw dataset")
+            
+            # Choose retrieve_data implementation based on debug flag
+            if self.debug_flag == self.DEBUG_MODES['PRODUCTION']:
+                # Default (0) uses legacy implementation
+                logging.info("Using LEGACY retrieve_data implementation")
+                dataset, size = self._retrieve_data_legacy(raw_dataset)
+            elif self.debug_flag in [self.DEBUG_MODES['REFAC_RETRIEVE'], self.DEBUG_MODES['REFAC_RETRIEVE_VERBOSE']]:
+                # Flags 901 and 902 use refactored implementation
+                dataset, size = self._retrieve_data(raw_dataset)
+            else:
+                # Any other flag defaults to legacy for safety
+                logging.info("Using LEGACY retrieve_data implementation (default)")
+                dataset, size = self._retrieve_data_legacy(raw_dataset)
+            
+            self.log_memory_usage("After processing dataset setup")
+            logging.info(f"Running scone prediction on full dataset of {size} examples")
+            predict_dict, acc = self.predict(dataset)
+            
+            # Note: Due to TensorFlow's lazy evaluation, actual data processing 
+            # happens during model.predict() above, not during dataset creation
+            
+            self.log_memory_usage("After prediction")
             self.write_predict_csv_file(predict_dict)
             history = { "accuracy": [acc] }
+        else :
+            pass
+        # XYZ
 
         logging.info(f"DONE with scone {self.mode}, print report and save history...")
         self._print_report_and_save_history(history)
@@ -258,6 +325,10 @@ class SconeClassifier():
 
         return model, history
 
+    def log_memory_usage(self, step_name):
+        memory_mb = self.process.memory_info().rss / 1024 / 1024
+        logging.info(f"{step_name}: Memory usage: {memory_mb:.1f} MB")
+
     def write_filter_wavelengths(self,outdir_train_model):
 
         # Created Jun 2024 by R.Kessler
@@ -292,8 +363,10 @@ class SconeClassifier():
         dataset = dataset.cache() # otherwise the rest of the dataset operations won't return entries in the same order
         dataset_no_ids = dataset.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
 
-
-        predictions = self.trained_model.predict(dataset_no_ids, verbose=0)
+        # Set verbosity based on config
+        predict_verbose = 1 if self.verbose_data_loading else 0
+        logging.info(f"Starting prediction on batches (batch_size={self.batch_size})...")
+        predictions = self.trained_model.predict(dataset_no_ids, verbose=predict_verbose)
 
         if self.categorical:
             predictions = np.argmax(predictions, axis=1) #TODO: is this the best way to return categorical results? doesnt preserve confidence info
@@ -386,30 +459,124 @@ class SconeClassifier():
 
         np.random.shuffle(filenames)
         logging.info(f"Found {len(filenames)} heatmap files")
-        logging.info(f"FIrst random heatmap file: {filenames[0]}")
+        logging.info(f"First random heatmap file: {filenames[0]}")
+        
+        # Show first few files for debugging
+        if len(filenames) > 3:
+            logging.info(f"Loading files including: {filenames[:3]}")
+        
+        # Calculate total size of files to be loaded
+        total_size_mb = sum(os.path.getsize(f) for f in filenames) / (1024 * 1024)
+        logging.info(f"Total data size to load: {total_size_mb:.1f} MB")
 
         raw_dataset = tf.data.TFRecordDataset(
             filenames,
             num_parallel_reads=80)
+        
+        logging.info(f"Dataset created with {80} parallel readers")
 
         #print(f"\n xxx raw_dataset = {raw_dataset}\n")  # .xyz
         #sys.stdout.flush() 
 
         return raw_dataset
 
-    def _retrieve_data(self, raw_dataset):
+    def _retrieve_data_legacy(self, raw_dataset):
         dataset_size = sum([1 for _ in raw_dataset])
         dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.with_z), num_parallel_calls=40)
         # self.types = [0,1] if not self.categorical else range(0, self.num_types)
 
         return dataset.apply(tf.data.experimental.ignore_errors()), dataset_size
 
+
+    def _retrieve_data(self, raw_dataset):
+        # Memory-efficient processing using TensorFlow's built-in optimizations
+        
+        # Track progress during data processing
+        self._chunk_counter = {'count': 0, 'start_time': time.time()}
+        
+        # Get size first for progress tracking
+        logging.info("Calculating dataset size...")
+        dataset_size = tf.data.experimental.cardinality(raw_dataset).numpy()
+        if dataset_size == tf.data.experimental.UNKNOWN_CARDINALITY:
+            # Fallback if cardinality is unknown
+            logging.info("Dataset size unknown, counting records...")
+            dataset_size = raw_dataset.reduce(0, lambda x, _: x + 1).numpy()
+        
+        logging.info(f"Total dataset size: {dataset_size} records")
+        self._estimated_total_chunks = dataset_size
+        
+        # Determine reporting interval based on verbosity and dataset size
+        if self.verbose_data_loading:
+            # In verbose mode, report more frequently (at least 20 reports)
+            report_interval = min(100, max(10, dataset_size // 20)) if dataset_size > 0 else 100
+            logging.info(f"Verbose mode: Progress will be reported every {report_interval} records")
+        else:
+            # Normal mode (at least 10 reports)
+            report_interval = min(1000, max(100, dataset_size // 10)) if dataset_size > 0 else 1000
+        
+        def process_with_progress(x):
+            self._chunk_counter['count'] += 1
+            
+            # Only report progress during actual processing, not during setup
+            # Skip the first record which is just pipeline verification
+            if self._chunk_counter['count'] > 1:
+                # Report progress at intervals
+                if self._chunk_counter['count'] % report_interval == 0:
+                    elapsed = time.time() - self._chunk_counter['start_time']
+                    rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0
+                    memory_mb = self.process.memory_info().rss / 1024 / 1024
+                    progress_pct = (self._chunk_counter['count'] / dataset_size * 100) if dataset_size > 0 else 0
+                    
+                    logging.info(f"Processing record {self._chunk_counter['count']}/{dataset_size} ({progress_pct:.1f}%) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")
+                    
+                    # Verbose mode shows estimated time remaining
+                    if self.verbose_data_loading:
+                        remaining = dataset_size - self._chunk_counter['count']
+                        eta = remaining / rate if rate > 0 else 0
+                        logging.info(f"  Estimated time remaining: {eta:.1f}s")
+                
+                # Also report at 25%, 50%, 75% milestones
+                elif dataset_size > 0:
+                    progress_pct = self._chunk_counter['count'] / dataset_size * 100
+                    if abs(progress_pct - 25) < 0.5 or abs(progress_pct - 50) < 0.5 or abs(progress_pct - 75) < 0.5:
+                        elapsed = time.time() - self._chunk_counter['start_time']
+                        rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0
+                        memory_mb = self.process.memory_info().rss / 1024 / 1024
+                        logging.info(f"Progress: {progress_pct:.0f}% ({self._chunk_counter['count']}/{dataset_size}) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")
+            
+            return get_images(x, self.input_shape, self.with_z)
+        
+        # Apply processing with progress tracking
+        dataset = raw_dataset.map(
+            process_with_progress, 
+            num_parallel_calls=tf.data.AUTOTUNE
+        ).ignore_errors()
+        
+        # Use prefetching for better performance and memory management
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)
+        
+        # Note: actual counting happens during iteration
+        logging.info(f"Dataset pipeline created with {tf.data.AUTOTUNE} parallel processing")
+        
+        return dataset, dataset_size
+    
+    
     # TODO: only class balance when desired, only split when desired
     # simpler split and retrieve function using tf dataset filter
     # - always class balances with min(abundances)
     # - splits into train, val, test sets
     def _split_and_retrieve_data(self):
-        dataset, size = self._retrieve_data(self._load_dataset())
+        raw_dataset = self._load_dataset()
+        
+        # Choose retrieve_data implementation based on debug flag
+        if hasattr(self, 'DEBUG_MODES') and self.debug_flag in [self.DEBUG_MODES['REFAC_RETRIEVE'], self.DEBUG_MODES['REFAC_RETRIEVE_VERBOSE']]:
+            logging.info("Using REFACTORED retrieve_data implementation for training")
+            dataset, size = self._retrieve_data(raw_dataset)
+        else:
+            # Default (0) and any other flag uses legacy
+            logging.info("Using LEGACY retrieve_data implementation for training")
+            dataset, size = self._retrieve_data_legacy(raw_dataset)
+        
         dataset = dataset.shuffle(size)
 
         unique, counts = np.unique(list(dataset.map(lambda image, label, *_: label["label"]).as_numpy_iterator()), return_counts=True)
@@ -548,13 +715,38 @@ class SconeClassifierIaModels(SconeClassifier):
 
 def get_args():
 
-    parser = argparse.ArgumentParser(description='set up the SCONE model')
+    parser = argparse.ArgumentParser(
+        description='SCONE (Supernova Classification with Neural Networks) - Train or predict using heatmap data',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Debug flag values:
+  0    Production mode (default) - uses legacy retrieve_data
+  1    Verbose logging
+  901  Use refactored retrieve_data 
+  902  Use refactored retrieve_data with verbose logging
 
-    msg = "config file name"
-    parser.add_argument('--config_path', type=str, help=msg)
+Examples:
+  %(prog)s --config_path config.yaml
+  %(prog)s --config_path config.yaml --debug_flag 902
+  %(prog)s --config_path config.yaml --heatmaps_subdir custom_heatmaps
+        """
+    )
 
-    msg = f"alternative heatmaps subdir (default = {HEATMAPS_SUBDIR_DEFAULT})"
-    parser.add_argument('--heatmaps_subdir', type=str, default=HEATMAPS_SUBDIR_DEFAULT,  help=msg)
+    parser.add_argument('--config_path', 
+                       type=str, 
+                       required=True,
+                       help='Path to YAML configuration file (required)')
+
+    parser.add_argument('--heatmaps_subdir', 
+                       type=str, 
+                       default=HEATMAPS_SUBDIR_DEFAULT,
+                       help=f'Alternative heatmaps subdirectory name (default: {HEATMAPS_SUBDIR_DEFAULT})')
+
+    parser.add_argument('--debug_flag', 
+                       type=int, 
+                       default=None,
+                       metavar='N',
+                       help='Debug flag for development/testing (0=production, 1=verbose, 900-902=implementation testing). Overrides config file.')
 
     args = parser.parse_args()
     return args
@@ -576,6 +768,15 @@ if __name__ == "__main__":
 
     # define full path to heatmaps based on subdir
     scone_config['heatmaps_path'] = os.path.join(scone_config['output_path'],args.heatmaps_subdir)
+
+    # Handle debug_flag: command-line overrides config file
+    if args.debug_flag is not None:
+        scone_config['debug_flag'] = args.debug_flag
+        logging.info(f"Debug flag set from command line: {args.debug_flag}")
+    elif 'debug_flag' not in scone_config:
+        scone_config['debug_flag'] = 0  # Default value
+    else:
+        logging.info(f"Debug flag from config: {scone_config['debug_flag']}")
 
     SconeClassifier(scone_config).run()
 
