@@ -245,25 +245,34 @@ class SconeClassifier():
             self.train_set, self.val_set, self.test_set = self._split_and_retrieve_data()
             self.trained_model, history = self.train()
             history = history.history    
+
         elif self.mode == MODE_PREDICT:
             self.log_memory_usage("Before loading dataset")  # 3rd Sept, 2025, A. Mitra - Monitor memory before data loading
             raw_dataset = self._load_dataset()
             self.log_memory_usage("After loading raw dataset")  # 3rd Sept, 2025, A. Mitra - Monitor memory after raw dataset creation
+
             
+            debug_flag = self.debug_flag
+            DEBUG_MODE_LIST = [self.DEBUG_MODES['REFAC_RETRIEVE'], 
+                               self.DEBUG_MODES['REFAC_RETRIEVE_VERBOSE'] ]
+
+            legacy_predict = debug_flag is None or debug_flag == self.DEBUG_MODES['PRODUCTION'] 
+
             # Choose retrieve_data implementation based on debug flag
-            if self.debug_flag == self.DEBUG_MODES['PRODUCTION']:
-                # Default (0) uses legacy implementation  # 3rd Sept, 2025, A. Mitra - Changed default behavior for production stability
+
+            if legacy_predict:
+                # Default (0) uses legacy implementation
                 logging.info("Using LEGACY retrieve_data implementation")
                 dataset, size = self._retrieve_data_legacy(raw_dataset)
-            elif self.debug_flag in [self.DEBUG_MODES['REFAC_RETRIEVE'], self.DEBUG_MODES['REFAC_RETRIEVE_VERBOSE']]:
-                # Flags 901 and 902 use refactored implementation  # 3rd Sept, 2025, A. Mitra - Enhanced implementation with monitoring
-                dataset, size = self._retrieve_data(raw_dataset)
+            elif debug_flag in DEBUG_MODE_LIST:
+                # Flags 901 and 902 use refactored implementation
+                dataset, size = self._retrieve_data(raw_dataset)  # refactored Sep 2025, A.Mitra
             else:
-                # Any other flag defaults to legacy for safety  # 3rd Sept, 2025, A. Mitra - Fallback to stable implementation
-                logging.info("Using LEGACY retrieve_data implementation (default)")
-                dataset, size = self._retrieve_data_legacy(raw_dataset)
+                sys.exit(f"n ABORT with undefined debug_flag = {debug_flag}")
+                # v.xyz
             
-            self.log_memory_usage("After processing dataset setup")  # 3rd Sept, 2025, A. Mitra - Monitor memory after dataset pipeline setup
+            self.log_memory_usage("Finished processing dataset setup")
+            
             logging.info(f"Running scone prediction on full dataset of {size} examples")
             predict_dict, acc = self.predict(dataset)
             
@@ -275,7 +284,6 @@ class SconeClassifier():
             history = { "accuracy": [acc] }
         else :
             pass
-        # XYZ
 
         logging.info(f"DONE with scone {self.mode}, print report and save history...")
         self._print_report_and_save_history(history)
