@@ -85,7 +85,7 @@ def stratified_split(dataset, train_proportion, types, include_test_set, class_b
     if class_balance:
         full_dataset_size = min_amount * len(by_type_data_lists.keys()) #full dataset size = heatmaps per type * num types
     else:
-        full_dataset_size = sum(train_nums.values()) + sum(val_nums.values())
+        full_dataset_size = sum(train_nums.values()) + sum(val_nums.values())  # 3rd Sept, 2025, A. Mitra - Use built-in sum() instead of np.sum() to prevent OOM errors when calculating dataset size
         print(f"train_nums: {train_nums}")
         print(f"val_nums: {val_nums}")
         

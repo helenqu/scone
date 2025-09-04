@@ -16,8 +16,8 @@ import time
 import json
 import argparse
 import atexit
-import time
-import psutil
+import time  # 3rd Sept, 2025, A. Mitra - Added for performance timing and progress tracking
+import psutil  # 3rd Sept, 2025, A. Mitra - Added for real-time memory usage monitoring
 
 from   data_utils  import *
 from   scone_utils import *   # RK - should merge with data_utils ?
@@ -38,7 +38,7 @@ class SconeClassifier():
     def __init__(self, config):
         self.scone_config = config  
         self.seed = config.get("seed", 42)
-        self.process = psutil.Process()
+        self.process = psutil.Process()  # 3rd Sept, 2025, A. Mitra - Initialize process object for memory monitoring
 
         self.output_path    = config['output_path']
         self.heatmaps_paths = config['heatmaps_paths'] if 'heatmaps_paths' in config else config['heatmaps_path'] # #TODO(6/21/23): eventually remove, for backwards compatibility
@@ -68,11 +68,11 @@ class SconeClassifier():
         self.class_balanced = config.get('class_balanced', True)
         self.external_trained_model = config.get('trained_model')
         self.prob_column_name = config.setdefault('prob_column_name', "PROB_SCONE") # RK
-        self.verbose_data_loading = config.get('verbose_data_loading', False)
+        self.verbose_data_loading = config.get('verbose_data_loading', False)  # 3rd Sept, 2025, A. Mitra - Enable detailed progress reporting during data loading
         
-        # Debug flag system for development/testing
-        self.debug_flag = config.get('debug_flag', 0)
-        self._setup_debug_modes()
+        # Debug flag system for development/testing  # 3rd Sept, 2025, A. Mitra - Flexible system for switching between implementations
+        self.debug_flag = config.get('debug_flag', 0)  # 3rd Sept, 2025, A. Mitra - Allow runtime switching between legacy/refactored code
+        self._setup_debug_modes()  # 3rd Sept, 2025, A. Mitra - Configure debug behavior based on flag value
 
         self.LEGACY = 'sim_fraction' in config
         self.REFAC  = not self.LEGACY
@@ -80,14 +80,14 @@ class SconeClassifier():
 
         return
     
-    def _setup_debug_modes(self):
+    def _setup_debug_modes(self):  # 3rd Sept, 2025, A. Mitra - New method to centralize debug flag configuration for easy maintenance
         """Setup debug modes based on debug_flag value.
         
         Debug flag meanings:
-        0    = Production mode (default) - uses legacy retrieve_data
+        0    = Production mode (default) - uses legacy retrieve_data  # 3rd Sept, 2025, A. Mitra - Changed default to use legacy implementation for stability
         1    = Verbose logging
-        901  = Use refactored retrieve_data with basic logging
-        902  = Use refactored retrieve_data with verbose logging
+        901  = Use refactored retrieve_data with basic logging  # 3rd Sept, 2025, A. Mitra - Refactored implementation with enhanced monitoring
+        902  = Use refactored retrieve_data with verbose logging  # 3rd Sept, 2025, A. Mitra - Refactored with detailed progress tracking
         1000+ = Reserved for future debug modes
         """
         
@@ -101,7 +101,7 @@ class SconeClassifier():
         
         # Apply debug settings
         if self.debug_flag == self.DEBUG_MODES['PRODUCTION']:
-            logging.info("Debug Mode: Production mode - using LEGACY retrieve_data")
+            logging.info("Debug Mode: Production mode - using LEGACY retrieve_data")  # 3rd Sept, 2025, A. Mitra - Default now uses legacy for stability
         elif self.debug_flag == self.DEBUG_MODES['VERBOSE']:
             self.verbose_data_loading = True
             logging.info("Debug Mode: Verbose logging enabled")
@@ -235,7 +235,7 @@ class SconeClassifier():
 
         self.t_start = time.time()
         self.trained_model = None
-        self.log_memory_usage("Initial startup")
+        self.log_memory_usage("Initial startup")  # 3rd Sept, 2025, A. Mitra - Track memory usage at key stages for debugging
 
         if self.external_trained_model:
             logging.info(f"loading trained model found at {self.external_trained_model}")
@@ -247,9 +247,10 @@ class SconeClassifier():
             history = history.history    
 
         elif self.mode == MODE_PREDICT:
-            self.log_memory_usage("Begin loading raw dataset")
+            self.log_memory_usage("Before loading dataset")  # 3rd Sept, 2025, A. Mitra - Monitor memory before data loading
             raw_dataset = self._load_dataset()
-            self.log_memory_usage("Finished loading raw dataset")
+            self.log_memory_usage("After loading raw dataset")  # 3rd Sept, 2025, A. Mitra - Monitor memory after raw dataset creation
+
             
             debug_flag = self.debug_flag
             DEBUG_MODE_LIST = [self.DEBUG_MODES['REFAC_RETRIEVE'], 
@@ -258,6 +259,7 @@ class SconeClassifier():
             legacy_predict = debug_flag is None or debug_flag == self.DEBUG_MODES['PRODUCTION'] 
 
             # Choose retrieve_data implementation based on debug flag
+
             if legacy_predict:
                 # Default (0) uses legacy implementation
                 logging.info("Using LEGACY retrieve_data implementation")
@@ -270,13 +272,14 @@ class SconeClassifier():
                 # v.xyz
             
             self.log_memory_usage("Finished processing dataset setup")
+            
             logging.info(f"Running scone prediction on full dataset of {size} examples")
             predict_dict, acc = self.predict(dataset)
             
-            # Note: Due to TensorFlow's lazy evaluation, actual data processing 
+            # Note: Due to TensorFlow's lazy evaluation, actual data processing   # 3rd Sept, 2025, A. Mitra - Important note for users about TF behavior
             # happens during model.predict() above, not during dataset creation
             
-            self.log_memory_usage("After prediction")
+            self.log_memory_usage("After prediction")  # 3rd Sept, 2025, A. Mitra - Monitor memory usage after prediction completes
             self.write_predict_csv_file(predict_dict)
             history = { "accuracy": [acc] }
         else :
@@ -330,9 +333,9 @@ class SconeClassifier():
 
         return model, history
 
-    def log_memory_usage(self, step_name):
-        memory_mb = self.process.memory_info().rss / 1024 / 1024
-        logging.info(f"{step_name}: Memory usage: {memory_mb:.1f} MB")
+    def log_memory_usage(self, step_name):  # 3rd Sept, 2025, A. Mitra - New method for real-time memory monitoring throughout processing
+        memory_mb = self.process.memory_info().rss / 1024 / 1024  # 3rd Sept, 2025, A. Mitra - Convert bytes to MB for readable output
+        logging.info(f"{step_name}: Memory usage: {memory_mb:.1f} MB")  # 3rd Sept, 2025, A. Mitra - Log memory usage with descriptive step name
 
     def write_filter_wavelengths(self,outdir_train_model):
 
@@ -368,9 +371,9 @@ class SconeClassifier():
         dataset = dataset.cache() # otherwise the rest of the dataset operations won't return entries in the same order
         dataset_no_ids = dataset.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
 
-        # Set verbosity based on config
-        predict_verbose = 1 if self.verbose_data_loading else 0
-        logging.info(f"Starting prediction on batches (batch_size={self.batch_size})...")
+        # Set verbosity based on config  # 3rd Sept, 2025, A. Mitra - Allow user to control prediction verbosity
+        predict_verbose = 1 if self.verbose_data_loading else 0  # 3rd Sept, 2025, A. Mitra - Show progress bar during prediction if verbose mode enabled
+        logging.info(f"Starting prediction on batches (batch_size={self.batch_size})...")  # 3rd Sept, 2025, A. Mitra - Inform user about batch processing start
         predictions = self.trained_model.predict(dataset_no_ids, verbose=predict_verbose)
 
         if self.categorical:
@@ -466,102 +469,102 @@ class SconeClassifier():
         logging.info(f"Found {len(filenames)} heatmap files")
         logging.info(f"First random heatmap file: {filenames[0]}")
         
-        # Show first few files for debugging
+        # Show first few files for debugging  # 3rd Sept, 2025, A. Mitra - Help users verify correct files are being loaded
         if len(filenames) > 3:
-            logging.info(f"Loading files including: {filenames[:3]}")
+            logging.info(f"Loading files including: {filenames[:3]}")  # 3rd Sept, 2025, A. Mitra - Display sample of files being processed
         
-        # Calculate total size of files to be loaded
-        total_size_mb = sum(os.path.getsize(f) for f in filenames) / (1024 * 1024)
-        logging.info(f"Total data size to load: {total_size_mb:.1f} MB")
+        # Calculate total size of files to be loaded  # 3rd Sept, 2025, A. Mitra - Inform users about expected data volume
+        total_size_mb = sum(os.path.getsize(f) for f in filenames) / (1024 * 1024)  # 3rd Sept, 2025, A. Mitra - Convert bytes to MB for readability
+        logging.info(f"Total data size to load: {total_size_mb:.1f} MB")  # 3rd Sept, 2025, A. Mitra - Show total data size to help users plan resource usage
 
         raw_dataset = tf.data.TFRecordDataset(
             filenames,
             num_parallel_reads=80)
         
-        logging.info(f"Dataset created with {80} parallel readers")
+        logging.info(f"Dataset created with {80} parallel readers")  # 3rd Sept, 2025, A. Mitra - Inform users about parallel reading configuration
 
         #print(f"\n xxx raw_dataset = {raw_dataset}\n")  # .xyz
         #sys.stdout.flush() 
 
         return raw_dataset
 
-    def _retrieve_data_legacy(self, raw_dataset):
-        dataset_size = sum([1 for _ in raw_dataset])
+    def _retrieve_data_legacy(self, raw_dataset):  # 3rd Sept, 2025, A. Mitra - Renamed from original _retrieve_data for clarity
+        dataset_size = sum([1 for _ in raw_dataset])  # 3rd Sept, 2025, A. Mitra - Simple counting method (may cause memory issues on large datasets)
         dataset = raw_dataset.map(lambda x: get_images(x, self.input_shape, self.with_z), num_parallel_calls=40)
         # self.types = [0,1] if not self.categorical else range(0, self.num_types)
 
         return dataset.apply(tf.data.experimental.ignore_errors()), dataset_size
 
 
-    def _retrieve_data(self, raw_dataset):
-        # Memory-efficient processing using TensorFlow's built-in optimizations
+    def _retrieve_data(self, raw_dataset):  # 3rd Sept, 2025, A. Mitra - New memory-efficient implementation with progress monitoring
+        # Memory-efficient processing using TensorFlow's built-in optimizations  # 3rd Sept, 2025, A. Mitra - Improved memory management for large datasets
         
-        # Track progress during data processing
-        self._chunk_counter = {'count': 0, 'start_time': time.time()}
+        # Track progress during data processing  # 3rd Sept, 2025, A. Mitra - Initialize progress tracking system
+        self._chunk_counter = {'count': 0, 'start_time': time.time()}  # 3rd Sept, 2025, A. Mitra - Counter and timer for progress reporting
         
-        # Get size first for progress tracking
+        # Get size first for progress tracking  # 3rd Sept, 2025, A. Mitra - Determine dataset size for progress calculations
         logging.info("Calculating dataset size...")
-        dataset_size = tf.data.experimental.cardinality(raw_dataset).numpy()
+        dataset_size = tf.data.experimental.cardinality(raw_dataset).numpy()  # 3rd Sept, 2025, A. Mitra - Use TF's efficient cardinality method
         if dataset_size == tf.data.experimental.UNKNOWN_CARDINALITY:
-            # Fallback if cardinality is unknown
+            # Fallback if cardinality is unknown  # 3rd Sept, 2025, A. Mitra - Handle cases where TF can't determine size
             logging.info("Dataset size unknown, counting records...")
-            dataset_size = raw_dataset.reduce(0, lambda x, _: x + 1).numpy()
+            dataset_size = raw_dataset.reduce(0, lambda x, _: x + 1).numpy()  # 3rd Sept, 2025, A. Mitra - Fallback counting method
         
         logging.info(f"Total dataset size: {dataset_size} records")
         self._estimated_total_chunks = dataset_size
         
-        # Determine reporting interval based on verbosity and dataset size
+        # Determine reporting interval based on verbosity and dataset size  # 3rd Sept, 2025, A. Mitra - Adaptive progress reporting frequency
         if self.verbose_data_loading:
-            # In verbose mode, report more frequently (at least 20 reports)
-            report_interval = min(100, max(10, dataset_size // 20)) if dataset_size > 0 else 100
-            logging.info(f"Verbose mode: Progress will be reported every {report_interval} records")
+            # In verbose mode, report more frequently (at least 20 reports)  # 3rd Sept, 2025, A. Mitra - More frequent updates for detailed monitoring
+            report_interval = min(100, max(10, dataset_size // 20)) if dataset_size > 0 else 100  # 3rd Sept, 2025, A. Mitra - Calculate optimal reporting frequency
+            logging.info(f"Verbose mode: Progress will be reported every {report_interval} records")  # 3rd Sept, 2025, A. Mitra - Inform user about reporting frequency
         else:
-            # Normal mode (at least 10 reports)
-            report_interval = min(1000, max(100, dataset_size // 10)) if dataset_size > 0 else 1000
+            # Normal mode (at least 10 reports)  # 3rd Sept, 2025, A. Mitra - Less frequent updates for normal operation
+            report_interval = min(1000, max(100, dataset_size // 10)) if dataset_size > 0 else 1000  # 3rd Sept, 2025, A. Mitra - Balanced reporting frequency
         
-        def process_with_progress(x):
-            self._chunk_counter['count'] += 1
+        def process_with_progress(x):  # 3rd Sept, 2025, A. Mitra - Inner function to process data with progress tracking
+            self._chunk_counter['count'] += 1  # 3rd Sept, 2025, A. Mitra - Increment record counter
             
-            # Only report progress during actual processing, not during setup
-            # Skip the first record which is just pipeline verification
+            # Only report progress during actual processing, not during setup  # 3rd Sept, 2025, A. Mitra - Avoid confusing progress reports during TF pipeline setup
+            # Skip the first record which is just pipeline verification  # 3rd Sept, 2025, A. Mitra - TF processes first record for pipeline verification
             if self._chunk_counter['count'] > 1:
-                # Report progress at intervals
+                # Report progress at intervals  # 3rd Sept, 2025, A. Mitra - Regular progress updates
                 if self._chunk_counter['count'] % report_interval == 0:
-                    elapsed = time.time() - self._chunk_counter['start_time']
-                    rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0
-                    memory_mb = self.process.memory_info().rss / 1024 / 1024
-                    progress_pct = (self._chunk_counter['count'] / dataset_size * 100) if dataset_size > 0 else 0
+                    elapsed = time.time() - self._chunk_counter['start_time']  # 3rd Sept, 2025, A. Mitra - Calculate processing time
+                    rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0  # 3rd Sept, 2025, A. Mitra - Calculate processing rate
+                    memory_mb = self.process.memory_info().rss / 1024 / 1024  # 3rd Sept, 2025, A. Mitra - Monitor current memory usage
+                    progress_pct = (self._chunk_counter['count'] / dataset_size * 100) if dataset_size > 0 else 0  # 3rd Sept, 2025, A. Mitra - Calculate completion percentage
                     
-                    logging.info(f"Processing record {self._chunk_counter['count']}/{dataset_size} ({progress_pct:.1f}%) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")
+                    logging.info(f"Processing record {self._chunk_counter['count']}/{dataset_size} ({progress_pct:.1f}%) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")  # 3rd Sept, 2025, A. Mitra - Comprehensive progress report
                     
-                    # Verbose mode shows estimated time remaining
+                    # Verbose mode shows estimated time remaining  # 3rd Sept, 2025, A. Mitra - Additional info for verbose users
                     if self.verbose_data_loading:
-                        remaining = dataset_size - self._chunk_counter['count']
-                        eta = remaining / rate if rate > 0 else 0
-                        logging.info(f"  Estimated time remaining: {eta:.1f}s")
+                        remaining = dataset_size - self._chunk_counter['count']  # 3rd Sept, 2025, A. Mitra - Calculate remaining records
+                        eta = remaining / rate if rate > 0 else 0  # 3rd Sept, 2025, A. Mitra - Estimate completion time
+                        logging.info(f"  Estimated time remaining: {eta:.1f}s")  # 3rd Sept, 2025, A. Mitra - Show ETA to user
                 
-                # Also report at 25%, 50%, 75% milestones
+                # Also report at 25%, 50%, 75% milestones  # 3rd Sept, 2025, A. Mitra - Show progress at key completion milestones
                 elif dataset_size > 0:
-                    progress_pct = self._chunk_counter['count'] / dataset_size * 100
-                    if abs(progress_pct - 25) < 0.5 or abs(progress_pct - 50) < 0.5 or abs(progress_pct - 75) < 0.5:
-                        elapsed = time.time() - self._chunk_counter['start_time']
-                        rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0
-                        memory_mb = self.process.memory_info().rss / 1024 / 1024
-                        logging.info(f"Progress: {progress_pct:.0f}% ({self._chunk_counter['count']}/{dataset_size}) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")
+                    progress_pct = self._chunk_counter['count'] / dataset_size * 100  # 3rd Sept, 2025, A. Mitra - Calculate current progress percentage
+                    if abs(progress_pct - 25) < 0.5 or abs(progress_pct - 50) < 0.5 or abs(progress_pct - 75) < 0.5:  # 3rd Sept, 2025, A. Mitra - Check if at milestone
+                        elapsed = time.time() - self._chunk_counter['start_time']  # 3rd Sept, 2025, A. Mitra - Calculate elapsed time
+                        rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0  # 3rd Sept, 2025, A. Mitra - Calculate processing rate
+                        memory_mb = self.process.memory_info().rss / 1024 / 1024  # 3rd Sept, 2025, A. Mitra - Check memory usage at milestone
+                        logging.info(f"Progress: {progress_pct:.0f}% ({self._chunk_counter['count']}/{dataset_size}) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")  # 3rd Sept, 2025, A. Mitra - Report milestone progress
             
-            return get_images(x, self.input_shape, self.with_z)
+            return get_images(x, self.input_shape, self.with_z)  # 3rd Sept, 2025, A. Mitra - Process the actual data using existing get_images function
         
-        # Apply processing with progress tracking
+        # Apply processing with progress tracking  # 3rd Sept, 2025, A. Mitra - Create data processing pipeline with monitoring
         dataset = raw_dataset.map(
-            process_with_progress, 
-            num_parallel_calls=tf.data.AUTOTUNE
-        ).ignore_errors()
+            process_with_progress,   # 3rd Sept, 2025, A. Mitra - Use progress-tracking wrapper function
+            num_parallel_calls=tf.data.AUTOTUNE  # 3rd Sept, 2025, A. Mitra - Let TF optimize parallelism automatically
+        ).ignore_errors()  # 3rd Sept, 2025, A. Mitra - Skip corrupted records gracefully
         
-        # Use prefetching for better performance and memory management
-        dataset = dataset.prefetch(tf.data.AUTOTUNE)
+        # Use prefetching for better performance and memory management  # 3rd Sept, 2025, A. Mitra - Overlap I/O with computation
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)  # 3rd Sept, 2025, A. Mitra - TF manages prefetch buffer size automatically
         
-        # Note: actual counting happens during iteration
-        logging.info(f"Dataset pipeline created with {tf.data.AUTOTUNE} parallel processing")
+        # Note: actual counting happens during iteration  # 3rd Sept, 2025, A. Mitra - Important note about TF's lazy evaluation
+        logging.info(f"Dataset pipeline created with {tf.data.AUTOTUNE} parallel processing")  # 3rd Sept, 2025, A. Mitra - Inform about automatic optimization
         
         return dataset, dataset_size
     
@@ -575,10 +578,10 @@ class SconeClassifier():
         
         # Choose retrieve_data implementation based on debug flag
         if hasattr(self, 'DEBUG_MODES') and self.debug_flag in [self.DEBUG_MODES['REFAC_RETRIEVE'], self.DEBUG_MODES['REFAC_RETRIEVE_VERBOSE']]:
-            logging.info("Using REFACTORED retrieve_data implementation for training")
+            logging.info("Using REFACTORED retrieve_data implementation for training")  # 3rd Sept, 2025, A. Mitra - Enhanced implementation for testing
             dataset, size = self._retrieve_data(raw_dataset)
         else:
-            # Default (0) and any other flag uses legacy
+            # Default (0) and any other flag uses legacy  # 3rd Sept, 2025, A. Mitra - Changed default to legacy for stability
             logging.info("Using LEGACY retrieve_data implementation for training")
             dataset, size = self._retrieve_data_legacy(raw_dataset)
         
@@ -720,15 +723,15 @@ class SconeClassifierIaModels(SconeClassifier):
 
 def get_args():
 
-    parser = argparse.ArgumentParser(
-        description='SCONE (Supernova Classification with Neural Networks) - Train or predict using heatmap data',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+    parser = argparse.ArgumentParser(  # 3rd Sept, 2025, A. Mitra - Enhanced argument parser with detailed help
+        description='SCONE (Supernova Classification with Neural Networks) - Train or predict using heatmap data',  # 3rd Sept, 2025, A. Mitra - Descriptive tool description
+        formatter_class=argparse.RawDescriptionHelpFormatter,  # 3rd Sept, 2025, A. Mitra - Preserve formatting in help text
+        epilog="""  # 3rd Sept, 2025, A. Mitra - Detailed help section with examples
 Debug flag values:
-  0    Production mode (default) - uses legacy retrieve_data
+  0    Production mode (default) - uses legacy retrieve_data  # 3rd Sept, 2025, A. Mitra - Stable default
   1    Verbose logging
-  901  Use refactored retrieve_data 
-  902  Use refactored retrieve_data with verbose logging
+  901  Use refactored retrieve_data  # 3rd Sept, 2025, A. Mitra - Enhanced implementation with monitoring
+  902  Use refactored retrieve_data with verbose logging  # 3rd Sept, 2025, A. Mitra - Detailed progress tracking
 
 Examples:
   %(prog)s --config_path config.yaml
@@ -737,21 +740,21 @@ Examples:
         """
     )
 
-    parser.add_argument('--config_path', 
+    parser.add_argument('--config_path',   # 3rd Sept, 2025, A. Mitra - Enhanced with required flag for clarity
                        type=str, 
-                       required=True,
-                       help='Path to YAML configuration file (required)')
+                       required=True,  # 3rd Sept, 2025, A. Mitra - Made requirement explicit
+                       help='Path to YAML configuration file (required)')  # 3rd Sept, 2025, A. Mitra - Clear help message
 
-    parser.add_argument('--heatmaps_subdir', 
+    parser.add_argument('--heatmaps_subdir',   # 3rd Sept, 2025, A. Mitra - Enhanced help message
                        type=str, 
                        default=HEATMAPS_SUBDIR_DEFAULT,
-                       help=f'Alternative heatmaps subdirectory name (default: {HEATMAPS_SUBDIR_DEFAULT})')
+                       help=f'Alternative heatmaps subdirectory name (default: {HEATMAPS_SUBDIR_DEFAULT})')  # 3rd Sept, 2025, A. Mitra - Show default value
 
-    parser.add_argument('--debug_flag', 
+    parser.add_argument('--debug_flag',   # 3rd Sept, 2025, A. Mitra - New debug flag argument for development
                        type=int, 
-                       default=None,
-                       metavar='N',
-                       help='Debug flag for development/testing (0=production, 1=verbose, 900-902=implementation testing). Overrides config file.')
+                       default=None,  # 3rd Sept, 2025, A. Mitra - None allows config file to take precedence
+                       metavar='N',  # 3rd Sept, 2025, A. Mitra - Clear placeholder in help
+                       help='Debug flag for development/testing (0=production, 1=verbose, 900-902=implementation testing). Overrides config file.')  # 3rd Sept, 2025, A. Mitra - Comprehensive help message
 
     args = parser.parse_args()
     return args
@@ -774,14 +777,14 @@ if __name__ == "__main__":
     # define full path to heatmaps based on subdir
     scone_config['heatmaps_path'] = os.path.join(scone_config['output_path'],args.heatmaps_subdir)
 
-    # Handle debug_flag: command-line overrides config file
+    # Handle debug_flag: command-line overrides config file  # 3rd Sept, 2025, A. Mitra - Implement priority system for debug flag
     if args.debug_flag is not None:
-        scone_config['debug_flag'] = args.debug_flag
-        logging.info(f"Debug flag set from command line: {args.debug_flag}")
+        scone_config['debug_flag'] = args.debug_flag  # 3rd Sept, 2025, A. Mitra - Command-line takes highest priority
+        logging.info(f"Debug flag set from command line: {args.debug_flag}")  # 3rd Sept, 2025, A. Mitra - Inform user about source
     elif 'debug_flag' not in scone_config:
-        scone_config['debug_flag'] = 0  # Default value
+        scone_config['debug_flag'] = 0  # Default value  # 3rd Sept, 2025, A. Mitra - Production mode as default
     else:
-        logging.info(f"Debug flag from config: {scone_config['debug_flag']}")
+        logging.info(f"Debug flag from config: {scone_config['debug_flag']}")  # 3rd Sept, 2025, A. Mitra - Show config file value being used
 
     SconeClassifier(scone_config).run()
 
