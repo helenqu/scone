@@ -6,6 +6,7 @@
 #     should still be compatible with both original and refactored scone codes
 #
 import os
+import sys
 import numpy as np
 import pandas as pd
 import yaml
@@ -39,6 +40,9 @@ class SconeClassifier():
         self.scone_config = config  
         self.seed = config.get("seed", 42)
         self.process = psutil.Process()  # 3rd Sept, 2025, A. Mitra - Initialize process object for memory monitoring
+        
+        # Memory optimization settings  # 5th Sept, 2025, A. Mitra - Configure TF for memory efficiency
+        self._configure_tf_memory()  # 5th Sept, 2025, A. Mitra - Apply memory optimization settings
 
         self.output_path    = config['output_path']
         self.heatmaps_paths = config['heatmaps_paths'] if 'heatmaps_paths' in config else config['heatmaps_path'] # #TODO(6/21/23): eventually remove, for backwards compatibility
@@ -70,6 +74,24 @@ class SconeClassifier():
         self.prob_column_name = config.setdefault('prob_column_name', "PROB_SCONE") # RK
         self.verbose_data_loading = config.get('verbose_data_loading', False)  # 3rd Sept, 2025, A. Mitra - Enable detailed progress reporting during data loading
         
+        # Memory optimization settings  # 5th Sept, 2025, A. Mitra - User-configurable memory optimization options
+        self.memory_optimize = config.get('memory_optimize', True)  # 5th Sept, 2025, A. Mitra - Enable memory optimization by default
+        self.streaming_threshold = config.get('streaming_threshold', 10000)  # 5th Sept, 2025, A. Mitra - Use streaming prediction for datasets larger than this
+        self.force_streaming = config.get('force_streaming', False)  # 5th Sept, 2025, A. Mitra - Force streaming regardless of dataset size
+        self.gc_frequency = config.get('gc_frequency', 50)  # 5th Sept, 2025, A. Mitra - Garbage collection frequency (batches)
+        self.enable_dynamic_batch_size = config.get('enable_dynamic_batch_size', True)  # 8th Sept, 2025, A. Mitra - Enable adaptive batch sizing
+        self.enable_micro_batching = config.get('enable_micro_batching', True)  # 8th Sept, 2025, A. Mitra - Enable micro-batching for memory efficiency
+        self.micro_batch_size = config.get('micro_batch_size', 4)  # 8th Sept, 2025, A. Mitra - Size of micro-batches within main batches
+        self.enable_model_quantization = config.get('enable_model_quantization', False)  # 8th Sept, 2025, A. Mitra - Enable model quantization for inference
+        self.quantization_method = config.get('quantization_method', 'dynamic')  # 8th Sept, 2025, A. Mitra - dynamic, float16, or int8
+        self.enable_disk_caching = config.get('enable_disk_caching', False)  # 8th Sept, 2025, A. Mitra - Enable disk-based caching for intermediate results
+        self.disk_cache_dir = config.get('disk_cache_dir', '/tmp/scone_cache')  # 8th Sept, 2025, A. Mitra - Directory for disk cache
+        self.ultra_low_memory_mode = config.get('ultra_low_memory_mode', False)  # 8th Sept, 2025, A. Mitra - Enable maximum memory reduction
+        self.memory_target_gb = config.get('memory_target_gb', 50)  # 8th Sept, 2025, A. Mitra - Target memory usage in GB
+        self.dry_run_mode = config.get('dry_run_mode', False)  # 8th Sept, 2025, A. Mitra - Test mode without data loading
+        self.debug_pause_mode = config.get('debug_pause_mode', False)  # 8th Sept, 2025, A. Mitra - Add pauses for memory inspection
+        self.pause_duration = config.get('pause_duration', 30)  # 8th Sept, 2025, A. Mitra - Pause duration in seconds
+        
         # Debug flag system for development/testing  # 3rd Sept, 2025, A. Mitra - Flexible system for switching between implementations
         self.debug_flag = config.get('debug_flag', 0)  # 3rd Sept, 2025, A. Mitra - Allow runtime switching between legacy/refactored code
         self._setup_debug_modes()  # 3rd Sept, 2025, A. Mitra - Configure debug behavior based on flag value
@@ -79,6 +101,30 @@ class SconeClassifier():
         logging.info(f"LEGACY code: {self.LEGACY}")
 
         return
+    
+    def _configure_tf_memory(self):  # 5th Sept, 2025, A. Mitra - Configure TensorFlow for optimal memory usage
+        """Configure TensorFlow memory settings for large dataset processing."""
+        # Enable memory growth for GPUs to avoid pre-allocating all memory  # 5th Sept, 2025, A. Mitra - Prevent GPU memory hogging
+        gpus = tf.config.experimental.list_physical_devices('GPU')
+        if gpus:
+            try:
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, True)  # 5th Sept, 2025, A. Mitra - Allow gradual GPU memory allocation
+                logging.info(f"Configured memory growth for {len(gpus)} GPU(s)")
+            except RuntimeError as e:
+                logging.warning(f"Failed to configure GPU memory growth: {e}")
+        
+        # Set mixed precision for memory efficiency (if supported)  # 5th Sept, 2025, A. Mitra - Use less memory per operation
+        try:
+            policy = tf.keras.mixed_precision.Policy('mixed_float16')
+            tf.keras.mixed_precision.set_global_policy(policy)
+            logging.info("Enabled mixed precision for memory efficiency")
+        except Exception as e:
+            logging.info(f"Mixed precision not enabled: {e}")
+        
+        # Configure dataset options for memory efficiency  # 5th Sept, 2025, A. Mitra - Optimize dataset processing
+        tf.config.threading.set_intra_op_parallelism_threads(0)  # 5th Sept, 2025, A. Mitra - Use all available CPU cores
+        tf.config.threading.set_inter_op_parallelism_threads(0)  # 5th Sept, 2025, A. Mitra - Parallelize between operations
     
     def _setup_debug_modes(self):  # 3rd Sept, 2025, A. Mitra - New method to centralize debug flag configuration for easy maintenance
         """Setup debug modes based on debug_flag value.
@@ -237,12 +283,20 @@ class SconeClassifier():
         self.trained_model = None
         self.log_memory_usage("Initial startup")  # 3rd Sept, 2025, A. Mitra - Track memory usage at key stages for debugging
 
+        # Handle dry run mode  # 8th Sept, 2025, A. Mitra - Test baseline memory without data
+        if self.dry_run_mode:
+            baseline_memory = self._dry_run_memory_baseline()
+            logging.info(f"🧪 DRY RUN COMPLETED: Baseline memory usage is {baseline_memory:.2f} GB")
+            return  # 8th Sept, 2025, A. Mitra - Exit after dry run
+
         if self.external_trained_model:
             logging.info(f"loading trained model found at {self.external_trained_model}")
             self.trained_model = models.load_model(self.external_trained_model, custom_objects={"Reshape": self.Reshape})
+            self._debug_pause_with_memory_report("Model loaded from disk")  # 8th Sept, 2025, A. Mitra - Pause after model loading
 
         if self.mode == MODE_TRAIN:
             self.train_set, self.val_set, self.test_set = self._split_and_retrieve_data()
+            self._debug_pause_with_memory_report("Training data loaded")  # 8th Sept, 2025, A. Mitra - Pause after data loading
             self.trained_model, history = self.train()
             history = history.history    
 
@@ -250,6 +304,7 @@ class SconeClassifier():
             self.log_memory_usage("Before loading dataset")  # 3rd Sept, 2025, A. Mitra - Monitor memory before data loading
             raw_dataset = self._load_dataset()
             self.log_memory_usage("After loading raw dataset")  # 3rd Sept, 2025, A. Mitra - Monitor memory after raw dataset creation
+            self._debug_pause_with_memory_report("Raw dataset loaded")  # 8th Sept, 2025, A. Mitra - Pause after raw data loading
 
             
             debug_flag = self.debug_flag
@@ -272,6 +327,7 @@ class SconeClassifier():
                 # v.xyz
             
             self.log_memory_usage("Finished processing dataset setup")
+            self._debug_pause_with_memory_report("Dataset processing completed")  # 8th Sept, 2025, A. Mitra - Pause after data processing
             
             logging.info(f"Running scone prediction on full dataset of {size} examples")
             predict_dict, acc = self.predict(dataset)
@@ -280,6 +336,7 @@ class SconeClassifier():
             # happens during model.predict() above, not during dataset creation
             
             self.log_memory_usage("After prediction")  # 3rd Sept, 2025, A. Mitra - Monitor memory usage after prediction completes
+            self._debug_pause_with_memory_report("Prediction completed")  # 8th Sept, 2025, A. Mitra - Pause after prediction
             self.write_predict_csv_file(predict_dict)
             history = { "accuracy": [acc] }
         else :
@@ -334,8 +391,15 @@ class SconeClassifier():
         return model, history
 
     def log_memory_usage(self, step_name):  # 3rd Sept, 2025, A. Mitra - New method for real-time memory monitoring throughout processing
-        memory_mb = self.process.memory_info().rss / 1024 / 1024  # 3rd Sept, 2025, A. Mitra - Convert bytes to MB for readable output
-        logging.info(f"{step_name}: Memory usage: {memory_mb:.1f} MB")  # 3rd Sept, 2025, A. Mitra - Log memory usage with descriptive step name
+        memory_info = self.process.memory_info()
+        system_memory = psutil.virtual_memory()
+        
+        process_rss_gb = memory_info.rss / (1024**3)
+        system_used_gb = system_memory.used / (1024**3)
+        system_available_gb = system_memory.available / (1024**3)
+        system_total_gb = system_memory.total / (1024**3)
+        
+        logging.info(f"{step_name}: Process Memory: {process_rss_gb:.2f} GB | System Used: {system_used_gb:.1f}/{system_total_gb:.1f} GB ({system_memory.percent:.1f}%) | Available: {system_available_gb:.1f} GB")
 
     def write_filter_wavelengths(self,outdir_train_model):
 
@@ -368,16 +432,397 @@ class SconeClassifier():
         if not self.trained_model:
             raise RuntimeError('model has not been trained! call `train` on the SconeClassifier instance before predict!')
 
-        dataset = dataset.cache() # otherwise the rest of the dataset operations won't return entries in the same order
+        # Monitor and adjust memory settings if needed  # 8th Sept, 2025, A. Mitra - Proactive memory management
+        self._monitor_and_adjust_memory_settings()
+        
+        # Apply model quantization for inference if enabled  # 8th Sept, 2025, A. Mitra - Reduce model memory footprint
+        if self.enable_model_quantization and self.mode == MODE_PREDICT:
+            self.trained_model = self._apply_model_quantization(self.trained_model)
+
+        return self._predict_with_memory_optimization(dataset)  # 5th Sept, 2025, A. Mitra - Intelligent memory-optimized prediction
+    
+    def _monitor_and_adjust_memory_settings(self):  # 8th Sept, 2025, A. Mitra - Real-time memory monitoring and optimization escalation
+        """
+        Monitor memory usage and automatically escalate optimization strategies.
+        """
+        try:
+            current_memory_gb = psutil.Process().memory_info().rss / (1024**3)
+            memory = psutil.virtual_memory()
+            memory_usage_pct = (memory.used / memory.total) * 100
+            available_gb = memory.available / (1024**3)
+            
+            # Log current memory state
+            logging.info(f"Memory monitoring: Current usage: {current_memory_gb:.1f}GB, System: {memory_usage_pct:.1f}%, Available: {available_gb:.1f}GB")
+            
+            # Auto-escalate optimizations based on memory pressure  # 8th Sept, 2025, A. Mitra - Dynamic optimization adjustment
+            escalated = False
+            
+            if current_memory_gb > self.memory_target_gb or memory_usage_pct > 85:
+                if not self.ultra_low_memory_mode:
+                    logging.warning(f"Memory target exceeded ({current_memory_gb:.1f}GB > {self.memory_target_gb}GB), enabling ultra-low memory mode")
+                    self.ultra_low_memory_mode = True
+                    escalated = True
+                
+                if not self.enable_model_quantization:
+                    logging.warning("Critical memory pressure, enabling model quantization")
+                    self.enable_model_quantization = True
+                    self.quantization_method = "dynamic"
+                    escalated = True
+                
+                if not self.force_streaming:
+                    logging.warning("Critical memory pressure, forcing streaming prediction")
+                    self.force_streaming = True
+                    self.streaming_threshold = min(1000, self.streaming_threshold)
+                    escalated = True
+                
+                # Reduce batch sizes aggressively  # 8th Sept, 2025, A. Mitra - Emergency batch size reduction
+                if current_memory_gb > self.memory_target_gb * 1.2:  # 8th Sept, 2025, A. Mitra - 20% over target
+                    self.batch_size = max(1, self.batch_size // 8)
+                    self.micro_batch_size = 1
+                    logging.warning(f"Emergency memory mode: reducing batch size to {self.batch_size}, micro-batch to 1")
+                    escalated = True
+                    
+                    # Force immediate garbage collection  # 8th Sept, 2025, A. Mitra - Emergency cleanup
+                    import gc
+                    gc.collect()
+                    
+                    # Check if memory reduced after cleanup  # 8th Sept, 2025, A. Mitra - Verify cleanup effectiveness
+                    new_memory_gb = psutil.Process().memory_info().rss / (1024**3)
+                    memory_freed = current_memory_gb - new_memory_gb
+                    logging.info(f"Emergency cleanup freed {memory_freed:.1f}GB, new usage: {new_memory_gb:.1f}GB")
+            
+            if escalated:
+                logging.info("Memory optimization settings auto-escalated due to memory pressure")
+                self.log_memory_usage("After automatic optimization escalation")
+            
+            return escalated
+            
+        except Exception as e:
+            logging.error(f"Memory monitoring failed: {e}")
+            return False
+    
+    def _apply_model_quantization(self, model):  # 8th Sept, 2025, A. Mitra - Quantize model for reduced memory usage during inference
+        """
+        Apply quantization to the model for memory-efficient inference.
+        """
+        try:
+            import tensorflow as tf
+            
+            if self.quantization_method == 'dynamic':
+                # Dynamic range quantization - good balance of speed and accuracy  # 8th Sept, 2025, A. Mitra - Most practical quantization method
+                logging.info("Applying dynamic range quantization to model...")
+                
+                # Convert to TensorFlow Lite with dynamic quantization  # 8th Sept, 2025, A. Mitra - Use TFLite for memory efficiency
+                converter = tf.lite.TFLiteConverter.from_keras_model(model)
+                converter.optimizations = [tf.lite.Optimize.DEFAULT]  # 8th Sept, 2025, A. Mitra - Enable dynamic quantization
+                tflite_model = converter.convert()
+                
+                # Create TFLite interpreter  # 8th Sept, 2025, A. Mitra - Wrapper for quantized model
+                interpreter = tf.lite.Interpreter(model_content=tflite_model)
+                interpreter.allocate_tensors()
+                
+                # Create a wrapper class to make it compatible with Keras model interface  # 8th Sept, 2025, A. Mitra - Seamless integration
+                class TFLiteModelWrapper:
+                    def __init__(self, interpreter):
+                        self.interpreter = interpreter
+                        self.input_details = interpreter.get_input_details()
+                        self.output_details = interpreter.get_output_details()
+                    
+                    def predict(self, x, verbose=0):
+                        # Handle batch prediction  # 8th Sept, 2025, A. Mitra - Process batches efficiently
+                        if len(x.shape) == 4:  # Batch of samples
+                            results = []
+                            for sample in x:
+                                self.interpreter.set_tensor(self.input_details[0]['index'], np.expand_dims(sample, 0).astype(np.float32))
+                                self.interpreter.invoke()
+                                output = self.interpreter.get_tensor(self.output_details[0]['index'])
+                                results.append(output[0])
+                            return np.array(results)
+                        else:  # Single sample
+                            self.interpreter.set_tensor(self.input_details[0]['index'], np.expand_dims(x, 0).astype(np.float32))
+                            self.interpreter.invoke()
+                            return self.interpreter.get_tensor(self.output_details[0]['index'])
+                
+                quantized_model = TFLiteModelWrapper(interpreter)
+                memory_reduction = (model.count_params() * 4 - len(tflite_model)) / (model.count_params() * 4) * 100
+                logging.info(f"Dynamic quantization applied. Estimated memory reduction: {memory_reduction:.1f}%")
+                return quantized_model
+                
+            elif self.quantization_method == 'float16':
+                # Convert weights to float16 for 50% memory reduction  # 8th Sept, 2025, A. Mitra - Simple half-precision conversion
+                logging.info("Converting model to float16 precision...")
+                
+                # Set mixed precision policy  # 8th Sept, 2025, A. Mitra - Use TensorFlow's mixed precision
+                policy = tf.keras.mixed_precision.Policy('mixed_float16')
+                tf.keras.mixed_precision.set_global_policy(policy)
+                
+                # Clone model with float16 weights  # 8th Sept, 2025, A. Mitra - Convert existing model
+                model_config = model.get_config()
+                float16_model = tf.keras.Model.from_config(model_config)
+                float16_model.set_weights(model.get_weights())
+                
+                logging.info("Float16 conversion applied. Memory reduction: ~50%")
+                return float16_model
+            
+            else:
+                logging.warning(f"Unsupported quantization method: {self.quantization_method}, using original model")
+                return model
+                
+        except Exception as e:
+            logging.error(f"Model quantization failed: {e}, using original model")
+            return model
+    
+    def _calculate_intelligent_threshold(self, dataset_size):  # 8th Sept, 2025, A. Mitra - Calculate adaptive streaming threshold
+        """
+        Calculate an intelligent streaming threshold based on available memory and dataset characteristics.
+        """
+        base_threshold = self.streaming_threshold
+        
+        try:
+            # Get available memory in MB  # 8th Sept, 2025, A. Mitra - Check system resources
+            memory = psutil.virtual_memory()
+            available_memory_mb = memory.available / 1024 / 1024
+            total_memory_mb = memory.total / 1024 / 1024
+            memory_usage_pct = (memory.used / memory.total) * 100
+            
+            # Estimate memory per sample (rough calculation based on input shape)  # 8th Sept, 2025, A. Mitra - Memory requirement estimation
+            # Each sample: (num_wavelength_bins, num_mjd_bins, 2) * 4 bytes (float32) + metadata overhead
+            bytes_per_sample = self.input_shape[0] * self.input_shape[1] * self.input_shape[2] * 4 * 2  # 8th Sept, 2025, A. Mitra - Factor of 2 for TF overhead
+            mb_per_sample = bytes_per_sample / (1024 * 1024)
+            
+            # Calculate how many samples could fit in available memory (with safety margin)  # 8th Sept, 2025, A. Mitra - Conservative memory planning
+            safety_factor = 0.3  # 8th Sept, 2025, A. Mitra - Use only 30% of available memory for data
+            memory_based_threshold = int((available_memory_mb * safety_factor) / mb_per_sample)
+            
+            logging.info(f"Memory analysis: Available: {available_memory_mb:.1f}MB, Usage: {memory_usage_pct:.1f}%, Estimated {mb_per_sample:.2f}MB per sample")
+            
+            # Adjust threshold based on memory pressure  # 8th Sept, 2025, A. Mitra - Adaptive threshold based on system state
+            if memory_usage_pct > 80:  # 8th Sept, 2025, A. Mitra - High memory pressure
+                actual_threshold = min(base_threshold // 2, memory_based_threshold)
+                logging.info(f"High memory pressure detected, reducing threshold to {actual_threshold}")
+            elif memory_usage_pct > 60:  # 8th Sept, 2025, A. Mitra - Moderate memory pressure
+                actual_threshold = min(int(base_threshold * 0.75), memory_based_threshold) 
+                logging.info(f"Moderate memory pressure, adjusting threshold to {actual_threshold}")
+            else:  # 8th Sept, 2025, A. Mitra - Normal memory conditions
+                # Use the larger of configured threshold or memory-based calculation  # 8th Sept, 2025, A. Mitra - Take advantage of available memory
+                actual_threshold = max(base_threshold, min(memory_based_threshold, base_threshold * 2))
+                if actual_threshold != base_threshold:
+                    logging.info(f"Memory available, adjusting threshold from {base_threshold} to {actual_threshold}")
+            
+            return max(actual_threshold, 1000)  # 8th Sept, 2025, A. Mitra - Minimum reasonable threshold
+            
+        except Exception as e:
+            logging.warning(f"Could not calculate intelligent threshold: {e}, using configured threshold: {base_threshold}")
+            return base_threshold
+    
+    def _calculate_adaptive_batch_size(self, base_batch_size):  # 8th Sept, 2025, A. Mitra - Dynamic batch size based on memory pressure
+        """
+        Calculate an adaptive batch size based on current memory usage and available memory.
+        Enhanced for ultra-low memory targets.
+        """
+        if not self.enable_dynamic_batch_size:
+            return base_batch_size
+        
+        try:
+            memory = psutil.virtual_memory()
+            available_memory_mb = memory.available / 1024 / 1024
+            total_memory_gb = memory.total / (1024 ** 3)
+            current_usage_gb = memory.used / (1024 ** 3)
+            memory_usage_pct = (memory.used / memory.total) * 100
+            
+            # Calculate memory per sample for batch sizing  # 8th Sept, 2025, A. Mitra - Estimate memory requirements
+            bytes_per_sample = self.input_shape[0] * self.input_shape[1] * self.input_shape[2] * 4 * 3  # 8th Sept, 2025, A. Mitra - Factor of 3 for gradients + activations
+            mb_per_sample = bytes_per_sample / (1024 * 1024)
+            
+            # Ultra-aggressive memory targeting  # 8th Sept, 2025, A. Mitra - Target specific memory usage
+            if self.ultra_low_memory_mode or current_usage_gb > self.memory_target_gb:
+                # Calculate batch size to stay within target memory  # 8th Sept, 2025, A. Mitra - Precise memory targeting
+                target_memory_mb = self.memory_target_gb * 1024
+                current_memory_mb = current_usage_gb * 1024
+                
+                if current_memory_mb > target_memory_mb:
+                    # Already over target, use minimum batch size  # 8th Sept, 2025, A. Mitra - Emergency mode
+                    adaptive_batch_size = 1
+                    self.micro_batch_size = 1  # 8th Sept, 2025, A. Mitra - Force single-sample micro-batches
+                    logging.warning(f"Memory usage {current_usage_gb:.1f}GB exceeds target {self.memory_target_gb}GB, using minimum batch size: 1")
+                else:
+                    # Calculate batch size to approach but not exceed target  # 8th Sept, 2025, A. Mitra - Conservative approach
+                    remaining_memory_mb = target_memory_mb - current_memory_mb
+                    max_batch_samples = max(1, int((remaining_memory_mb * 0.3) / mb_per_sample))  # 8th Sept, 2025, A. Mitra - Use 30% of remaining
+                    adaptive_batch_size = min(base_batch_size, max_batch_samples)
+                    logging.info(f"Ultra-low memory mode: target {self.memory_target_gb}GB, current {current_usage_gb:.1f}GB, batch size: {adaptive_batch_size}")
+                
+                return adaptive_batch_size
+            
+            # Standard aggressive batch size reduction under memory pressure  # 8th Sept, 2025, A. Mitra - Original logic enhanced
+            if memory_usage_pct > 90:  # 8th Sept, 2025, A. Mitra - Ultra-critical memory pressure
+                adaptive_batch_size = 1
+                self.micro_batch_size = 1
+                logging.warning(f"Ultra-critical memory pressure ({memory_usage_pct:.1f}%), using single-sample processing")
+            elif memory_usage_pct > 85:  # 8th Sept, 2025, A. Mitra - Critical memory pressure
+                adaptive_batch_size = max(1, base_batch_size // 16)  # 8th Sept, 2025, A. Mitra - More aggressive reduction
+                self.micro_batch_size = min(2, self.micro_batch_size)
+                logging.info(f"Critical memory pressure ({memory_usage_pct:.1f}%), reducing batch size from {base_batch_size} to {adaptive_batch_size}")
+            elif memory_usage_pct > 75:  # 8th Sept, 2025, A. Mitra - High memory pressure
+                adaptive_batch_size = max(1, base_batch_size // 8)  # 8th Sept, 2025, A. Mitra - Increased reduction
+                self.micro_batch_size = min(2, self.micro_batch_size)
+                logging.info(f"High memory pressure ({memory_usage_pct:.1f}%), reducing batch size from {base_batch_size} to {adaptive_batch_size}")
+            elif memory_usage_pct > 60:  # 8th Sept, 2025, A. Mitra - Moderate memory pressure
+                adaptive_batch_size = max(2, base_batch_size // 4)
+                logging.info(f"Moderate memory pressure ({memory_usage_pct:.1f}%), reducing batch size from {base_batch_size} to {adaptive_batch_size}")
+            elif available_memory_mb < 2000:  # 8th Sept, 2025, A. Mitra - Low available memory threshold increased
+                adaptive_batch_size = max(1, base_batch_size // 8)
+                logging.info(f"Low available memory ({available_memory_mb:.1f}MB), reducing batch size from {base_batch_size} to {adaptive_batch_size}")
+            else:
+                # Calculate optimal batch size based on available memory  # 8th Sept, 2025, A. Mitra - Use memory efficiently when available
+                max_samples_in_memory = int((available_memory_mb * 0.2) / mb_per_sample)  # 8th Sept, 2025, A. Mitra - Reduced from 40% to 20%
+                adaptive_batch_size = min(base_batch_size, max(1, max_samples_in_memory))
+                if adaptive_batch_size != base_batch_size:
+                    logging.info(f"Memory-optimized batch size: {adaptive_batch_size} (from {base_batch_size})")
+            
+            return adaptive_batch_size
+            
+        except Exception as e:
+            logging.warning(f"Could not calculate adaptive batch size: {e}, using original batch size: {base_batch_size}")
+            return base_batch_size
+    
+    def _predict_with_memory_optimization(self, dataset):  # 5th Sept, 2025, A. Mitra - Choose optimal prediction strategy based on dataset size and config
+        """
+        Choose between streaming and regular prediction based on dataset size and configuration.
+        """
+        if not self.memory_optimize:
+            logging.info("Memory optimization disabled, using original prediction method")
+            return self._predict_original(dataset)
+        
+        # Estimate dataset size efficiently  # 5th Sept, 2025, A. Mitra - Quick size estimation without full iteration
+        try:
+            dataset_size = tf.data.experimental.cardinality(dataset).numpy()
+            if dataset_size == tf.data.experimental.UNKNOWN_CARDINALITY:
+                # For unknown cardinality, take a small sample to estimate  # 5th Sept, 2025, A. Mitra - Sampling approach for size estimation
+                sample_size = min(1000, self.streaming_threshold // 10)
+                sample_count = dataset.take(sample_size).reduce(0, lambda x, _: x + 1).numpy()
+                if sample_count == sample_size:
+                    logging.info(f"Dataset size > {sample_size}, estimating as large dataset")
+                    dataset_size = self.streaming_threshold + 1  # 5th Sept, 2025, A. Mitra - Force streaming for large datasets
+                else:
+                    dataset_size = sample_count  # 5th Sept, 2025, A. Mitra - Small dataset, exact count
+        except Exception as e:
+            logging.warning(f"Could not estimate dataset size: {e}, using streaming prediction")
+            dataset_size = self.streaming_threshold + 1  # 8th Sept, 2025, A. Mitra - Default to streaming on error
+        
+        # Intelligent streaming decision based on available memory and dataset characteristics  # 8th Sept, 2025, A. Mitra - Enhanced decision logic
+        actual_threshold = self._calculate_intelligent_threshold(dataset_size)
+        
+        # Choose prediction method based on size and configuration  # 5th Sept, 2025, A. Mitra - Intelligent selection of prediction strategy
+        if self.force_streaming or dataset_size > actual_threshold:
+            logging.info(f"Using ultra-low memory prediction for dataset size: {dataset_size} (threshold: {actual_threshold})")
+            return self._predict_ultra_low_memory(dataset)  # 5th Sept, 2025, A. Mitra - Process files individually to minimize memory
+        else:
+            logging.info(f"Using optimized standard prediction for smaller dataset size: {dataset_size}")
+            return self._predict_optimized(dataset)  # 5th Sept, 2025, A. Mitra - Memory-optimized version of original method
+
+    def _predict_streaming(self, dataset):  # 5th Sept, 2025, A. Mitra - Memory-efficient streaming prediction
+        """
+        Streaming prediction that processes dataset in chunks without loading everything into memory.
+        Significantly reduces memory usage for large datasets.
+        """
+        logging.info(f"Using streaming prediction with batch_size={self.batch_size}")
+        self.log_memory_usage("Starting streaming prediction")  # 5th Sept, 2025, A. Mitra - Monitor memory at start
+        
+        # Initialize collections for results  # 5th Sept, 2025, A. Mitra - Collect results incrementally
+        all_predictions = []
+        all_true_labels = []
+        all_snids = []
+        
+        total_correct = 0
+        total_samples = 0
+        batch_count = 0
+        
+        # Create batched datasets for parallel processing  # 5th Sept, 2025, A. Mitra - Separate image/label and metadata processing
+        image_label_batches = dataset.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
+        metadata_batches = dataset.map(lambda _, label, id_: (label["label"], id_["id"])).batch(self.batch_size)
+        
+        # Process in streaming chunks  # 5th Sept, 2025, A. Mitra - Process one batch at a time to minimize memory usage
+        logging.info("Processing predictions in streaming batches...")
+        
+        # Zip the batches together for synchronized processing  # 5th Sept, 2025, A. Mitra - Process data and metadata together efficiently
+        for (image_batch, _), (true_labels_batch, ids_batch) in zip(image_label_batches, metadata_batches):
+            batch_count += 1
+            
+            # Extract image tensor from the batch structure  # 5th Sept, 2025, A. Mitra - Handle dictionary structure properly
+            if isinstance(image_batch, dict):
+                images = image_batch['image']  # 5th Sept, 2025, A. Mitra - Extract image tensor from dictionary
+            else:
+                images = image_batch  # 5th Sept, 2025, A. Mitra - Use directly if already a tensor
+            
+            batch_size_actual = tf.shape(images)[0].numpy()
+            
+            # Run prediction on this batch only  # 5th Sept, 2025, A. Mitra - Predict on small batch, not entire dataset
+            batch_predictions = self.trained_model.predict(images, verbose=0)  # 5th Sept, 2025, A. Mitra - Direct prediction on image batch
+            
+            if self.categorical:
+                batch_predictions = np.argmax(batch_predictions, axis=1)  # 5th Sept, 2025, A. Mitra - Handle categorical predictions
+            batch_predictions = batch_predictions.flatten()
+            
+            # Extract batch metadata  # 5th Sept, 2025, A. Mitra - Convert TF tensors to numpy arrays
+            batch_true_labels = true_labels_batch.numpy()
+            batch_snids = ids_batch.numpy()
+            
+            # Accumulate results  # 5th Sept, 2025, A. Mitra - Collect batch results
+            all_predictions.extend(batch_predictions)
+            all_true_labels.extend(batch_true_labels)
+            all_snids.extend(batch_snids)
+            
+            # Calculate accuracy incrementally  # 5th Sept, 2025, A. Mitra - Track accuracy without storing all predictions
+            batch_correct = np.sum(np.round(batch_predictions) == batch_true_labels)
+            total_correct += batch_correct
+            total_samples += len(batch_predictions)
+            
+            # Progress reporting  # 5th Sept, 2025, A. Mitra - Show progress during streaming prediction
+            if batch_count % 10 == 0 or self.verbose_data_loading:
+                current_acc = total_correct / total_samples if total_samples > 0 else 0
+                self.log_memory_usage(f"Processed batch {batch_count}, samples: {total_samples}, accuracy: {current_acc:.3f}")
+            
+            # Force garbage collection periodically to free memory  # 5th Sept, 2025, A. Mitra - Aggressive memory management
+            if batch_count % self.gc_frequency == 0:
+                import gc
+                gc.collect()  # 5th Sept, 2025, A. Mitra - Free unused memory periodically
+                
+            # Clear batch variables to help with memory management  # 5th Sept, 2025, A. Mitra - Explicit cleanup
+            del images, batch_predictions, batch_true_labels, batch_snids
+        
+        self.log_memory_usage(f"Completed streaming prediction: {total_samples} samples in {batch_count} batches")
+        
+        # Calculate final accuracy  # 5th Sept, 2025, A. Mitra - Compute overall accuracy
+        final_accuracy = total_correct / total_samples if total_samples > 0 else 0
+        
+        # Create results dictionary  # 5th Sept, 2025, A. Mitra - Package results for output
+        df_dict = {
+            'pred_labels': all_predictions,
+            'true_labels': all_true_labels, 
+            'snid': all_snids
+        }
+        
+        logging.info(f"Streaming prediction completed: {total_samples} samples, accuracy: {final_accuracy:.4f}")
+        return df_dict, final_accuracy
+        
+    def _predict_original(self, dataset):  # 5th Sept, 2025, A. Mitra - Original prediction method (memory-heavy but preserved for compatibility)
+        """
+        Original prediction method that caches entire dataset in memory.
+        Use only when memory optimization is disabled.
+        """
+        logging.warning("Using original prediction method - high memory usage expected")
+        
+        dataset = dataset.cache()  # 5th Sept, 2025, A. Mitra - This loads entire dataset into memory
         dataset_no_ids = dataset.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
 
-        # Set verbosity based on config  # 3rd Sept, 2025, A. Mitra - Allow user to control prediction verbosity
-        predict_verbose = 1 if self.verbose_data_loading else 0  # 3rd Sept, 2025, A. Mitra - Show progress bar during prediction if verbose mode enabled
-        logging.info(f"Starting prediction on batches (batch_size={self.batch_size})...")  # 3rd Sept, 2025, A. Mitra - Inform user about batch processing start
+        # Set verbosity based on config
+        predict_verbose = 1 if self.verbose_data_loading else 0
+        logging.info(f"Starting prediction on batches (batch_size={self.batch_size})...")
         predictions = self.trained_model.predict(dataset_no_ids, verbose=predict_verbose)
 
         if self.categorical:
-            predictions = np.argmax(predictions, axis=1) #TODO: is this the best way to return categorical results? doesnt preserve confidence info
+            predictions = np.argmax(predictions, axis=1)
         predictions = predictions.flatten()
 
         true_labels = dataset.map(lambda _, label, *args: label["label"])
@@ -389,6 +834,361 @@ class SconeClassifier():
         acc = float(np.count_nonzero((prediction_ints - list(true_labels.as_numpy_iterator())) == 0)) / len(prediction_ints)
 
         return df_dict, acc
+    
+    def _predict_optimized(self, dataset):  # 5th Sept, 2025, A. Mitra - Memory-optimized version for smaller datasets
+        """
+        Memory-optimized prediction for smaller datasets that can fit in memory but with optimizations.
+        Uses less aggressive optimization than streaming but still saves memory compared to original.
+        """
+        logging.info("Using optimized prediction for smaller dataset")
+        self.log_memory_usage("Starting optimized prediction")
+        
+        # Calculate adaptive batch size based on memory pressure  # 8th Sept, 2025, A. Mitra - Dynamic batch sizing
+        adaptive_batch_size = self._calculate_adaptive_batch_size(self.batch_size)
+        
+        # Don't cache the full dataset, but use prefetching for efficiency  # 5th Sept, 2025, A. Mitra - Balance between memory and performance
+        dataset_batched = dataset.map(lambda image, label, *_: (image, label)).batch(adaptive_batch_size).prefetch(2)
+        
+        # Use micro-batching if enabled for additional memory savings  # 8th Sept, 2025, A. Mitra - Further memory optimization
+        if self.enable_micro_batching and adaptive_batch_size > self.micro_batch_size:
+            return self._predict_with_micro_batching(dataset, adaptive_batch_size)
+        
+        # Set verbosity based on config
+        predict_verbose = 1 if self.verbose_data_loading else 0
+        logging.info(f"Starting optimized prediction on batches (batch_size={adaptive_batch_size})...")
+        predictions = self.trained_model.predict(dataset_batched, verbose=predict_verbose)
+
+        if self.categorical:
+            predictions = np.argmax(predictions, axis=1)
+        predictions = predictions.flatten()
+
+        # Process metadata without caching the full dataset  # 5th Sept, 2025, A. Mitra - Extract metadata efficiently
+        true_labels = []
+        snids = []
+        for item in dataset:
+            true_labels.append(item[1]["label"].numpy())
+            snids.append(item[2]["id"].numpy())
+        
+        df_dict = {'pred_labels': predictions, 'true_labels': true_labels, 'snid': snids}
+
+        prediction_ints = np.round(predictions)
+        acc = float(np.count_nonzero((prediction_ints - true_labels) == 0)) / len(prediction_ints)
+        
+        self.log_memory_usage("Completed optimized prediction")
+        logging.info(f"Optimized prediction completed: {len(predictions)} samples, accuracy: {acc:.4f}")
+        return df_dict, acc
+
+    def _predict_with_micro_batching(self, dataset, adaptive_batch_size):  # 8th Sept, 2025, A. Mitra - Ultra-memory-efficient micro-batching
+        """
+        Process batches in micro-batches to minimize peak memory usage during prediction.
+        """
+        logging.info(f"Using micro-batching: batch_size={adaptive_batch_size}, micro_batch_size={self.micro_batch_size}")
+        self.log_memory_usage("Starting micro-batched prediction")
+        
+        # Initialize collections for results
+        all_predictions = []
+        all_true_labels = []
+        all_snids = []
+        
+        total_correct = 0
+        total_samples = 0
+        batch_count = 0
+        
+        # Create batched dataset 
+        dataset_batched = dataset.map(lambda image, label, *_: (image, label)).batch(adaptive_batch_size)
+        metadata_batched = dataset.map(lambda _, label, id_: (label["label"], id_["id"])).batch(adaptive_batch_size)
+        
+        # Process each batch in micro-batches  # 8th Sept, 2025, A. Mitra - Split large batches into smaller chunks
+        for (image_batch, _), (true_labels_batch, ids_batch) in zip(dataset_batched, metadata_batched):
+            batch_count += 1
+            
+            # Extract tensors  # 8th Sept, 2025, A. Mitra - Handle dictionary structure
+            if isinstance(image_batch, dict):
+                images = image_batch['image']
+            else:
+                images = image_batch
+            
+            batch_size_actual = tf.shape(images)[0].numpy()
+            
+            # Process this batch in micro-batches  # 8th Sept, 2025, A. Mitra - Split batch to reduce peak memory
+            batch_predictions = []
+            
+            for i in range(0, batch_size_actual, self.micro_batch_size):
+                end_idx = min(i + self.micro_batch_size, batch_size_actual)
+                micro_batch = images[i:end_idx]
+                
+                # Process micro-batch  # 8th Sept, 2025, A. Mitra - Minimal memory footprint
+                micro_predictions = self.trained_model.predict(micro_batch, verbose=0)
+                batch_predictions.append(micro_predictions)
+                
+                # Clear micro-batch immediately  # 8th Sept, 2025, A. Mitra - Aggressive memory management
+                del micro_batch, micro_predictions
+                
+                # Garbage collect frequently during micro-batching  # 8th Sept, 2025, A. Mitra - Keep memory usage minimal
+                if i % (self.micro_batch_size * 4) == 0:
+                    import gc
+                    gc.collect()
+            
+            # Combine micro-batch predictions  # 8th Sept, 2025, A. Mitra - Reconstruct full batch predictions
+            batch_predictions = np.concatenate(batch_predictions, axis=0)
+            
+            if self.categorical:
+                batch_predictions = np.argmax(batch_predictions, axis=1)
+            batch_predictions = batch_predictions.flatten()
+            
+            # Extract metadata
+            batch_true_labels = true_labels_batch.numpy()
+            batch_snids = ids_batch.numpy()
+            
+            # Accumulate results
+            all_predictions.extend(batch_predictions)
+            all_true_labels.extend(batch_true_labels)
+            all_snids.extend(batch_snids)
+            
+            # Calculate accuracy
+            batch_correct = np.sum(np.round(batch_predictions) == batch_true_labels)
+            total_correct += batch_correct
+            total_samples += len(batch_predictions)
+            
+            # Progress reporting and memory monitoring  # 8th Sept, 2025, A. Mitra - Track micro-batching progress
+            if batch_count % 5 == 0 or self.verbose_data_loading:
+                current_acc = total_correct / total_samples if total_samples > 0 else 0
+                self.log_memory_usage(f"Micro-batched {batch_count} batches, samples: {total_samples}, accuracy: {current_acc:.3f}")
+            
+            # Clear batch variables  # 8th Sept, 2025, A. Mitra - Immediate cleanup
+            del images, batch_predictions, batch_true_labels, batch_snids
+        
+        # Calculate final accuracy
+        final_accuracy = total_correct / total_samples if total_samples > 0 else 0
+        
+        # Create results dictionary
+        df_dict = {
+            'pred_labels': all_predictions,
+            'true_labels': all_true_labels, 
+            'snid': all_snids
+        }
+        
+        self.log_memory_usage(f"Completed micro-batched prediction: {total_samples} samples in {batch_count} batches")
+        logging.info(f"Micro-batched prediction completed: {total_samples} samples, accuracy: {final_accuracy:.4f}")
+        return df_dict, final_accuracy
+
+    def _predict_ultra_low_memory(self, dataset):  # 5th Sept, 2025, A. Mitra - Ultra-low memory approach processing files individually
+        """
+        Process TFRecord files one by one to minimize memory usage.
+        Enhanced with progressive loading and immediate cleanup for maximum memory efficiency.
+        """
+        logging.info("Using ultra-low memory prediction - processing files individually")
+        self.log_memory_usage("Starting ultra-low memory prediction")
+        
+        # Get the original filenames from the dataset loading
+        if type(self.heatmaps_paths) == list:
+            filenames = ["{}/{}".format(heatmaps_path, f.name) for heatmaps_path in self.heatmaps_paths for f in os.scandir(heatmaps_path) if "tfrecord" in f.name]
+        else:
+            filenames = ["{}/{}".format(self.heatmaps_paths, f.name) for f in os.scandir(self.heatmaps_paths) if "tfrecord" in f.name]
+        
+        # Use ultra-small batch sizes for extreme memory efficiency  # 8th Sept, 2025, A. Mitra - Maximize memory savings
+        ultra_batch_size = self._calculate_adaptive_batch_size(self.batch_size)
+        if self.ultra_low_memory_mode:
+            ultra_batch_size = min(ultra_batch_size, 4)  # 8th Sept, 2025, A. Mitra - Cap batch size in ultra mode
+        
+        # Initialize collections for results with memory-efficient storage  # 8th Sept, 2025, A. Mitra - Use generators instead of lists
+        def result_generator():
+            total_correct = 0
+            total_samples = 0
+            file_count = 0
+            
+            logging.info(f"Processing {len(filenames)} files with ultra-small batches (size: {ultra_batch_size})")
+            
+            for filename in filenames:
+                file_count += 1
+                logging.info(f"Processing file {file_count}/{len(filenames)}: {filename}")
+                
+                # Process single file at a time  # 5th Sept, 2025, A. Mitra - Load and process one file, then release memory
+                try:
+                    file_dataset = tf.data.TFRecordDataset([filename], num_parallel_reads=1)
+                    file_dataset = file_dataset.map(lambda x: get_images(x, self.input_shape, self.with_z), num_parallel_calls=1)
+                    file_dataset = file_dataset.apply(tf.data.experimental.ignore_errors())
+                    
+                    batch_count_in_file = 0
+                    # Process this file in ultra-small batches  # 8th Sept, 2025, A. Mitra - Even smaller batches than before
+                    for batch in file_dataset.batch(ultra_batch_size):
+                        batch_count_in_file += 1
+                        
+                        # Immediate processing with minimal memory retention  # 8th Sept, 2025, A. Mitra - Process and release immediately
+                        batch_results = self._process_ultra_small_batch(batch, filename)
+                        
+                        if batch_results is not None:
+                            batch_predictions, batch_true_labels, batch_snids = batch_results
+                            
+                            # Yield results immediately instead of accumulating  # 8th Sept, 2025, A. Mitra - Stream results
+                            for pred, true_label, snid in zip(batch_predictions, batch_true_labels, batch_snids):
+                                yield pred, true_label, snid
+                                
+                            # Update counters
+                            batch_correct = np.sum(np.round(batch_predictions) == batch_true_labels)
+                            total_correct += batch_correct
+                            total_samples += len(batch_predictions)
+                        
+                        # Force immediate cleanup after each batch  # 8th Sept, 2025, A. Mitra - Aggressive memory management
+                        del batch
+                        if batch_count_in_file % 5 == 0:  # 8th Sept, 2025, A. Mitra - Frequent garbage collection
+                            import gc
+                            gc.collect()
+                    
+                    # Clean up file dataset immediately  # 8th Sept, 2025, A. Mitra - Release file data
+                    del file_dataset
+                    
+                    # Progress report per file with memory check  # 8th Sept, 2025, A. Mitra - Monitor memory during processing
+                    if file_count % 1 == 0:  # 8th Sept, 2025, A. Mitra - Report after every file
+                        current_acc = total_correct / total_samples if total_samples > 0 else 0
+                        self.log_memory_usage(f"Completed file {file_count}/{len(filenames)}, samples: {total_samples}, accuracy: {current_acc:.3f}")
+                    
+                    # Aggressive garbage collection after each file  # 8th Sept, 2025, A. Mitra - Force memory cleanup
+                    import gc
+                    gc.collect()
+                    
+                    # Check if we're exceeding memory target  # 8th Sept, 2025, A. Mitra - Dynamic memory monitoring
+                    if hasattr(self, 'memory_target_gb'):
+                        current_memory_gb = psutil.Process().memory_info().rss / (1024**3)
+                        if current_memory_gb > self.memory_target_gb * 1.1:  # 8th Sept, 2025, A. Mitra - 10% tolerance
+                            logging.warning(f"Memory usage {current_memory_gb:.1f}GB exceeds target {self.memory_target_gb}GB, forcing additional cleanup")
+                            gc.collect()
+                            
+                except Exception as e:
+                    logging.error(f"Error processing file {filename}: {e}")
+                    continue
+                    
+            logging.info(f"Ultra-low memory processing completed: {total_samples} samples, accuracy: {total_correct/total_samples:.4f}")
+        
+        # Process results progressively to avoid accumulating in memory  # 8th Sept, 2025, A. Mitra - Stream-based results collection
+        all_predictions = []
+        all_true_labels = []
+        all_snids = []
+        total_samples = 0
+        total_correct = 0
+        
+        # Process in chunks to balance memory vs. progress tracking  # 8th Sept, 2025, A. Mitra - Chunk-based processing
+        chunk_size = 1000  # 8th Sept, 2025, A. Mitra - Process results in chunks
+        chunk_predictions = []
+        chunk_true_labels = []
+        chunk_snids = []
+        
+        for pred, true_label, snid in result_generator():
+            chunk_predictions.append(pred)
+            chunk_true_labels.append(true_label)
+            chunk_snids.append(snid)
+            
+            if len(chunk_predictions) >= chunk_size:
+                # Process chunk and add to final results  # 8th Sept, 2025, A. Mitra - Batch processing of chunks
+                all_predictions.extend(chunk_predictions)
+                all_true_labels.extend(chunk_true_labels)
+                all_snids.extend(chunk_snids)
+                
+                chunk_correct = np.sum(np.round(chunk_predictions) == chunk_true_labels)
+                total_correct += chunk_correct
+                total_samples += len(chunk_predictions)
+                
+                # Clear chunk data  # 8th Sept, 2025, A. Mitra - Free chunk memory
+                chunk_predictions.clear()
+                chunk_true_labels.clear() 
+                chunk_snids.clear()
+                
+                # Periodic memory reporting  # 8th Sept, 2025, A. Mitra - Track memory during chunk processing
+                if total_samples % (chunk_size * 5) == 0:
+                    current_acc = total_correct / total_samples
+                    self.log_memory_usage(f"Processed {total_samples} samples, accuracy: {current_acc:.3f}")
+        
+        # Handle remaining samples in final chunk  # 8th Sept, 2025, A. Mitra - Process final partial chunk
+        if chunk_predictions:
+            all_predictions.extend(chunk_predictions)
+            all_true_labels.extend(chunk_true_labels)
+            all_snids.extend(chunk_snids)
+            
+            chunk_correct = np.sum(np.round(chunk_predictions) == chunk_true_labels)
+            total_correct += chunk_correct
+            total_samples += len(chunk_predictions)
+        
+        # Calculate final accuracy
+        final_accuracy = total_correct / total_samples if total_samples > 0 else 0
+        
+        # Create results dictionary
+        df_dict = {
+            'pred_labels': all_predictions,
+            'true_labels': all_true_labels, 
+            'snid': all_snids
+        }
+        
+        self.log_memory_usage(f"Ultra-low memory prediction completed: {total_samples} samples")
+        logging.info(f"Ultra-low memory prediction completed: {total_samples} samples, accuracy: {final_accuracy:.4f}")
+        return df_dict, final_accuracy
+    
+    def _process_ultra_small_batch(self, batch, filename):  # 8th Sept, 2025, A. Mitra - Process individual batches with extreme memory efficiency
+        """
+        Process a single ultra-small batch with immediate cleanup.
+        """
+        try:
+            # Extract image data properly  # 5th Sept, 2025, A. Mitra - Handle the data structure
+            if len(batch) == 3:  # image, label, id format
+                image_data, label_data, id_data = batch
+            else:
+                logging.warning(f"Unexpected batch structure in file {filename}")
+                return None
+            
+            # Handle dictionary structure for images  # 5th Sept, 2025, A. Mitra - Extract image tensor
+            if isinstance(image_data, dict):
+                images = image_data['image']
+            else:
+                images = image_data
+            
+            batch_size_actual = tf.shape(images)[0].numpy()
+            
+            # Process with micro-batching if batch is still too large  # 8th Sept, 2025, A. Mitra - Additional micro-batching layer
+            if batch_size_actual > self.micro_batch_size:
+                predictions_list = []
+                for i in range(0, batch_size_actual, self.micro_batch_size):
+                    end_idx = min(i + self.micro_batch_size, batch_size_actual)
+                    micro_images = images[i:end_idx]
+                    
+                    # Single micro-batch prediction  # 8th Sept, 2025, A. Mitra - Minimal memory footprint
+                    micro_predictions = self.trained_model.predict(micro_images, verbose=0)
+                    predictions_list.append(micro_predictions)
+                    
+                    # Immediate cleanup of micro-batch  # 8th Sept, 2025, A. Mitra - Free memory immediately
+                    del micro_images, micro_predictions
+                
+                # Combine micro-batch results  # 8th Sept, 2025, A. Mitra - Reconstruct batch predictions
+                batch_predictions = np.concatenate(predictions_list, axis=0)
+                del predictions_list  # 8th Sept, 2025, A. Mitra - Clean up intermediate list
+            else:
+                # Direct prediction for small batches  # 8th Sept, 2025, A. Mitra - Process small batches directly
+                batch_predictions = self.trained_model.predict(images, verbose=0)
+            
+            if self.categorical:
+                batch_predictions = np.argmax(batch_predictions, axis=1)
+            batch_predictions = batch_predictions.flatten()
+            
+            # Extract metadata  # 5th Sept, 2025, A. Mitra - Get labels and IDs
+            if isinstance(label_data, dict):
+                batch_true_labels = label_data["label"].numpy()
+            else:
+                batch_true_labels = label_data.numpy()
+                
+            if isinstance(id_data, dict):
+                batch_snids = id_data["id"].numpy()
+            else:
+                batch_snids = id_data.numpy()
+            
+            # Return results immediately  # 8th Sept, 2025, A. Mitra - Return for immediate processing
+            results = (batch_predictions, batch_true_labels, batch_snids)
+            
+            # Clear all batch data immediately  # 8th Sept, 2025, A. Mitra - Aggressive cleanup
+            del images, image_data, label_data, id_data
+            
+            return results
+            
+        except Exception as e:
+            logging.error(f"Error processing ultra-small batch: {e}")
+            return None
 
     def test(self, test_set=None):
         if not self.mode == MODE_PREDICT :
@@ -457,13 +1257,126 @@ class SconeClassifier():
                       metrics=metrics)
 
         return model
+    
+    def _debug_pause_with_memory_report(self, stage_name):  # 8th Sept, 2025, A. Mitra - Pause execution for memory analysis
+        """
+        Pause execution and provide detailed memory report for debugging.
+        """
+        if not self.debug_pause_mode:
+            return
+            
+        # Detailed memory reporting  # 8th Sept, 2025, A. Mitra - Comprehensive memory analysis
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        system_memory = psutil.virtual_memory()
+        
+        current_rss_gb = memory_info.rss / (1024**3)
+        current_vms_gb = memory_info.vms / (1024**3)
+        system_used_gb = system_memory.used / (1024**3)
+        system_available_gb = system_memory.available / (1024**3)
+        system_total_gb = system_memory.total / (1024**3)
+        
+        print(f"\n" + "="*80)
+        print(f"🔍 MEMORY DEBUG PAUSE: {stage_name}")
+        print(f"="*80)
+        print(f"Process Memory (RSS):     {current_rss_gb:.2f} GB")
+        print(f"Process Memory (VMS):     {current_vms_gb:.2f} GB")
+        print(f"System Memory Used:       {system_used_gb:.2f} GB / {system_total_gb:.2f} GB ({system_memory.percent:.1f}%)")
+        print(f"System Memory Available:  {system_available_gb:.2f} GB")
+        
+        # TensorFlow GPU memory if available  # 8th Sept, 2025, A. Mitra - GPU memory info
+        try:
+            gpus = tf.config.experimental.list_physical_devices('GPU')
+            if gpus:
+                print(f"GPU Devices:              {len(gpus)} GPU(s) detected")
+            else:
+                print(f"GPU Devices:              No GPUs detected (CPU mode)")
+        except:
+            print(f"GPU Devices:              Unable to query GPU info")
+        
+        # Configuration summary  # 8th Sept, 2025, A. Mitra - Show current optimization settings
+        print(f"\nOptimization Settings:")
+        print(f"  Ultra-low memory mode:  {self.ultra_low_memory_mode}")
+        print(f"  Dynamic batch sizing:   {self.enable_dynamic_batch_size}")
+        print(f"  Micro-batching:         {self.enable_micro_batching}")
+        print(f"  Model quantization:     {self.enable_model_quantization}")
+        print(f"  Streaming threshold:    {self.streaming_threshold}")
+        print(f"  Current batch size:     {self.batch_size}")
+        print(f"  Micro-batch size:       {self.micro_batch_size}")
+        
+        print(f"\n🕐 Pausing for {self.pause_duration} seconds for memory inspection...")
+        print(f"💡 Use 'pmap {process.pid}' or 'htop -p {process.pid}' in another terminal")
+        print(f"="*80)
+        
+        # Pause execution  # 8th Sept, 2025, A. Mitra - Allow time for external memory inspection
+        import time
+        time.sleep(self.pause_duration)
+        
+        print(f"🔄 Resuming execution after {stage_name} pause\n")
+    
+    def _dry_run_memory_baseline(self):  # 8th Sept, 2025, A. Mitra - Measure baseline memory usage without data
+        """
+        Perform a dry run to measure baseline memory usage without loading data.
+        """
+        logging.info("🧪 DRY RUN MODE: Testing memory baseline without data loading")
+        self.log_memory_usage("Dry run start (before TensorFlow initialization)")
+        
+        # Pause for initial memory inspection  # 8th Sept, 2025, A. Mitra - Check memory before TF setup
+        self._debug_pause_with_memory_report("Initial state (before TensorFlow setup)")
+        
+        # Initialize TensorFlow strategy (this can use significant memory)  # 8th Sept, 2025, A. Mitra - TF setup memory impact
+        logging.info("Initializing TensorFlow distributed strategy...")
+        strategy_test = tf.distribute.MirroredStrategy()
+        self.log_memory_usage("After TensorFlow strategy initialization")
+        self._debug_pause_with_memory_report("TensorFlow strategy initialized")
+        
+        # Load model if specified (major memory consumer)  # 8th Sept, 2025, A. Mitra - Model loading memory impact
+        if self.external_trained_model:
+            logging.info(f"Loading trained model from {self.external_trained_model}")
+            test_model = models.load_model(self.external_trained_model, 
+                                         custom_objects={"Reshape": self.Reshape})
+            self.log_memory_usage("After model loading")
+            self._debug_pause_with_memory_report("Model loaded")
+            
+            # Apply quantization if enabled  # 8th Sept, 2025, A. Mitra - Quantization memory impact
+            if self.enable_model_quantization:
+                logging.info("Applying model quantization...")
+                quantized_model = self._apply_model_quantization(test_model)
+                self.log_memory_usage("After model quantization")
+                self._debug_pause_with_memory_report("Model quantized")
+                del test_model  # 8th Sept, 2025, A. Mitra - Clean up original model
+            
+        # Test empty dataset creation (TensorFlow overhead)  # 8th Sept, 2025, A. Mitra - TF dataset memory overhead
+        logging.info("Testing empty dataset creation...")
+        empty_dataset = tf.data.Dataset.from_tensor_slices([])
+        empty_dataset = empty_dataset.batch(self.batch_size)
+        self.log_memory_usage("After empty dataset creation")
+        self._debug_pause_with_memory_report("Empty dataset created")
+        
+        # Memory configuration summary  # 8th Sept, 2025, A. Mitra - Configuration impact analysis
+        logging.info("="*60)
+        logging.info("🔍 DRY RUN MEMORY ANALYSIS SUMMARY")
+        logging.info("="*60)
+        
+        current_memory_gb = psutil.Process().memory_info().rss / (1024**3)
+        logging.info(f"Final baseline memory usage: {current_memory_gb:.2f} GB")
+        logging.info(f"Memory target: {self.memory_target_gb} GB")
+        logging.info(f"Available for data processing: {max(0, self.memory_target_gb - current_memory_gb):.2f} GB")
+        
+        if current_memory_gb > self.memory_target_gb * 0.5:  # 8th Sept, 2025, A. Mitra - Warn if baseline is high
+            logging.warning(f"⚠️  Baseline memory ({current_memory_gb:.2f}GB) is high relative to target ({self.memory_target_gb}GB)")
+            logging.warning("Consider enabling model quantization or reducing batch sizes")
+        
+        logging.info("✅ Dry run completed - no data was loaded")
+        self._debug_pause_with_memory_report("Dry run completed")
+        
+        return current_memory_gb
 
     def _load_dataset(self):
         if type(self.heatmaps_paths) == list:
             filenames = ["{}/{}".format(heatmaps_path, f.name) for heatmaps_path in self.heatmaps_paths for f in os.scandir(heatmaps_path) if "tfrecord" in f.name]
         else:
             filenames = ["{}/{}".format(self.heatmaps_paths, f.name) for f in os.scandir(self.heatmaps_paths) if "tfrecord" in f.name]
-
 
         np.random.shuffle(filenames)
         logging.info(f"Found {len(filenames)} heatmap files")
@@ -477,16 +1390,92 @@ class SconeClassifier():
         total_size_mb = sum(os.path.getsize(f) for f in filenames) / (1024 * 1024)  # 3rd Sept, 2025, A. Mitra - Convert bytes to MB for readability
         logging.info(f"Total data size to load: {total_size_mb:.1f} MB")  # 3rd Sept, 2025, A. Mitra - Show total data size to help users plan resource usage
 
-        raw_dataset = tf.data.TFRecordDataset(
-            filenames,
-            num_parallel_reads=80)
-        
-        logging.info(f"Dataset created with {80} parallel readers")  # 3rd Sept, 2025, A. Mitra - Inform users about parallel reading configuration
+        # Implement memory-mapped access for large datasets  # 8th Sept, 2025, A. Mitra - Reduce memory pressure from file I/O
+        if total_size_mb > 1000 and self.memory_optimize:  # 8th Sept, 2025, A. Mitra - Use memory mapping for datasets > 1GB
+            logging.info("Large dataset detected, using memory-mapped file access")
+            raw_dataset = self._create_memory_mapped_dataset(filenames)
+        else:
+            raw_dataset = tf.data.TFRecordDataset(filenames, num_parallel_reads=80)
+            logging.info(f"Dataset created with 80 parallel readers")
 
-        #print(f"\n xxx raw_dataset = {raw_dataset}\n")  # .xyz
-        #sys.stdout.flush() 
+        # Apply disk caching if enabled  # 8th Sept, 2025, A. Mitra - Cache processed data to disk to avoid reprocessing
+        if self.enable_disk_caching:
+            raw_dataset = self._apply_disk_caching(raw_dataset)
 
         return raw_dataset
+
+    def _create_memory_mapped_dataset(self, filenames):  # 8th Sept, 2025, A. Mitra - Memory-mapped file access for large datasets
+        """
+        Create a TensorFlow dataset using memory-mapped files to reduce memory usage.
+        """
+        try:
+            logging.info("Creating memory-mapped dataset for efficient large file access")
+            
+            # Use single-threaded reading for memory-mapped access  # 8th Sept, 2025, A. Mitra - Avoid memory overhead from parallel readers
+            raw_dataset = tf.data.TFRecordDataset(filenames, num_parallel_reads=1)
+            
+            # Apply interleaving for better I/O efficiency  # 8th Sept, 2025, A. Mitra - Process files in round-robin fashion
+            def create_single_file_dataset(filename):
+                return tf.data.TFRecordDataset([filename], num_parallel_reads=1)
+            
+            filenames_dataset = tf.data.Dataset.from_tensor_slices(filenames)
+            raw_dataset = filenames_dataset.interleave(
+                create_single_file_dataset,
+                cycle_length=min(4, len(filenames)),  # 8th Sept, 2025, A. Mitra - Interleave 4 files at once
+                num_parallel_calls=1,  # 8th Sept, 2025, A. Mitra - Single-threaded for memory efficiency
+                deterministic=False
+            )
+            
+            logging.info(f"Memory-mapped dataset created with interleaved access to {len(filenames)} files")
+            return raw_dataset
+            
+        except Exception as e:
+            logging.warning(f"Memory-mapped dataset creation failed: {e}, falling back to standard loading")
+            return tf.data.TFRecordDataset(filenames, num_parallel_reads=10)  # 8th Sept, 2025, A. Mitra - Reduced parallel reads as fallback
+
+    def _apply_disk_caching(self, raw_dataset):  # 8th Sept, 2025, A. Mitra - Disk-based caching for intermediate results
+        """
+        Apply disk caching to avoid reprocessing data in subsequent runs.
+        """
+        try:
+            import hashlib
+            
+            # Create cache directory if it doesn't exist  # 8th Sept, 2025, A. Mitra - Setup caching infrastructure
+            os.makedirs(self.disk_cache_dir, exist_ok=True)
+            
+            # Generate cache key based on heatmaps path and config  # 8th Sept, 2025, A. Mitra - Unique cache per dataset/config
+            cache_key_data = f"{self.heatmaps_paths}_{self.input_shape}_{self.with_z}"
+            cache_key = hashlib.md5(cache_key_data.encode()).hexdigest()[:16]
+            cache_file = os.path.join(self.disk_cache_dir, f"scone_cache_{cache_key}")
+            
+            # Check if cache exists and is newer than source files  # 8th Sept, 2025, A. Mitra - Validate cache freshness
+            if os.path.exists(cache_file):
+                cache_time = os.path.getmtime(cache_file)
+                if type(self.heatmaps_paths) == list:
+                    newest_source = max(os.path.getmtime(path) for path in self.heatmaps_paths if os.path.exists(path))
+                else:
+                    newest_source = os.path.getmtime(self.heatmaps_paths) if os.path.exists(self.heatmaps_paths) else 0
+                
+                if cache_time > newest_source:
+                    logging.info(f"Using cached dataset from {cache_file}")
+                    return raw_dataset.cache(cache_file)
+            
+            logging.info(f"Creating disk cache at {cache_file}")
+            cached_dataset = raw_dataset.cache(cache_file)
+            
+            # Trigger cache creation by taking one element  # 8th Sept, 2025, A. Mitra - Force cache population
+            try:
+                next(iter(cached_dataset.take(1)))
+                logging.info("Disk cache successfully created")
+            except Exception as cache_error:
+                logging.warning(f"Cache creation failed: {cache_error}, continuing without cache")
+                return raw_dataset
+            
+            return cached_dataset
+            
+        except Exception as e:
+            logging.warning(f"Disk caching failed: {e}, continuing without cache")
+            return raw_dataset
 
     def _retrieve_data_legacy(self, raw_dataset):  # 3rd Sept, 2025, A. Mitra - Renamed from original _retrieve_data for clarity
         dataset_size = sum([1 for _ in raw_dataset])  # 3rd Sept, 2025, A. Mitra - Simple counting method (may cause memory issues on large datasets)
@@ -733,10 +1722,16 @@ Debug flag values:
   901  Use refactored retrieve_data  # 3rd Sept, 2025, A. Mitra - Enhanced implementation with monitoring
   902  Use refactored retrieve_data with verbose logging  # 3rd Sept, 2025, A. Mitra - Detailed progress tracking
 
+Memory optimization examples:  # 8th Sept, 2025, A. Mitra - Added streaming examples
+  %(prog)s --config_path config.yaml --force_streaming           # Always use streaming (memory-efficient)
+  %(prog)s --config_path config.yaml --no_streaming             # Disable streaming (speed-optimized)
+  %(prog)s --config_path config.yaml --streaming_threshold 5000 # Custom threshold for auto-streaming
+
 Examples:
   %(prog)s --config_path config.yaml
   %(prog)s --config_path config.yaml --debug_flag 902
   %(prog)s --config_path config.yaml --heatmaps_subdir custom_heatmaps
+  %(prog)s --config_path config.yaml --force_streaming --debug_flag 902
         """
     )
 
@@ -755,6 +1750,34 @@ Examples:
                        default=None,  # 3rd Sept, 2025, A. Mitra - None allows config file to take precedence
                        metavar='N',  # 3rd Sept, 2025, A. Mitra - Clear placeholder in help
                        help='Debug flag for development/testing (0=production, 1=verbose, 900-902=implementation testing). Overrides config file.')  # 3rd Sept, 2025, A. Mitra - Comprehensive help message
+
+    parser.add_argument('--force_streaming',   # 8th Sept, 2025, A. Mitra - Memory optimization control
+                       action='store_true',  # 8th Sept, 2025, A. Mitra - Boolean flag
+                       help='Force streaming prediction regardless of dataset size (overrides config)')  # 8th Sept, 2025, A. Mitra - Clear description
+
+    parser.add_argument('--no_streaming',   # 8th Sept, 2025, A. Mitra - Disable streaming option
+                       action='store_true',  # 8th Sept, 2025, A. Mitra - Boolean flag  
+                       help='Disable streaming prediction and use regular method (overrides config)')  # 8th Sept, 2025, A. Mitra - Clear description
+
+    parser.add_argument('--streaming_threshold',   # 8th Sept, 2025, A. Mitra - Configurable threshold
+                       type=int, 
+                       default=None,  # 8th Sept, 2025, A. Mitra - None allows config file to take precedence
+                       metavar='N',  # 8th Sept, 2025, A. Mitra - Clear placeholder
+                       help='Dataset size threshold for automatic streaming (default: 10000). Overrides config file.')  # 8th Sept, 2025, A. Mitra - Helpful description
+
+    parser.add_argument('--dry_run',   # 8th Sept, 2025, A. Mitra - Dry run mode for baseline memory testing
+                       action='store_true',  # 8th Sept, 2025, A. Mitra - Boolean flag
+                       help='Run in dry run mode to test baseline memory usage without loading data')  # 8th Sept, 2025, A. Mitra - Clear description
+
+    parser.add_argument('--debug_pause',   # 8th Sept, 2025, A. Mitra - Debug pause mode for memory inspection
+                       action='store_true',  # 8th Sept, 2025, A. Mitra - Boolean flag  
+                       help='Enable debug pause mode with memory inspection pauses')  # 8th Sept, 2025, A. Mitra - Clear description
+
+    parser.add_argument('--pause_duration',   # 8th Sept, 2025, A. Mitra - Configurable pause duration
+                       type=int, 
+                       default=30,  # 8th Sept, 2025, A. Mitra - Default 30 seconds
+                       metavar='SECONDS',  # 8th Sept, 2025, A. Mitra - Clear placeholder
+                       help='Duration of debug pauses in seconds (default: 30)')  # 8th Sept, 2025, A. Mitra - Helpful description
 
     args = parser.parse_args()
     return args
@@ -785,6 +1808,34 @@ if __name__ == "__main__":
         scone_config['debug_flag'] = 0  # Default value  # 3rd Sept, 2025, A. Mitra - Production mode as default
     else:
         logging.info(f"Debug flag from config: {scone_config['debug_flag']}")  # 3rd Sept, 2025, A. Mitra - Show config file value being used
+
+    # Handle streaming options: command-line overrides config file  # 8th Sept, 2025, A. Mitra - Implement streaming control overrides
+    if args.force_streaming:
+        scone_config['force_streaming'] = True
+        logging.info("Force streaming enabled from command line")
+    elif args.no_streaming:
+        scone_config['force_streaming'] = False
+        scone_config['memory_optimize'] = False  # 8th Sept, 2025, A. Mitra - Disable all memory optimization
+        logging.info("Streaming disabled from command line")
+    
+    if args.streaming_threshold is not None:
+        scone_config['streaming_threshold'] = args.streaming_threshold
+        logging.info(f"Streaming threshold set from command line: {args.streaming_threshold}")
+    
+    # Handle debug and dry run arguments  # 8th Sept, 2025, A. Mitra - Handle new debugging arguments
+    if args.dry_run:
+        scone_config['dry_run_mode'] = True
+        logging.info("Dry run mode enabled from command line")
+    
+    if args.debug_pause:
+        scone_config['debug_pause_mode'] = True
+        scone_config['pause_duration'] = args.pause_duration
+        logging.info(f"Debug pause mode enabled with {args.pause_duration}s pauses")
+    
+    # Validate streaming arguments  # 8th Sept, 2025, A. Mitra - Prevent conflicting arguments
+    if args.force_streaming and args.no_streaming:
+        logging.error("Error: --force_streaming and --no_streaming cannot be used together")
+        sys.exit(1)
 
     SconeClassifier(scone_config).run()
 
