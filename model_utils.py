@@ -5,6 +5,8 @@
 #     is useful for side-by-side testing of scone codes or options. This code
 #     should still be compatible with both original and refactored scone codes
 #
+# Sep 12 2025: remove self.LEGACY and self.REFAC .. keep only REFAC code 
+
 import os
 import sys
 import numpy as np
@@ -65,56 +67,53 @@ class SconeClassifier():
             # ids_file.close()
             # self.num_types = len(np.unique(types))
         self.num_types = len(self.types) if self.categorical else 2
-        self.train_proportion = config.get('train_proportion', 0.8)
-        self.with_z = config.get('with_z', False)
-        self.abundances = None
-        self.train_set = self.val_set = self.test_set = None
-        self.class_balanced = config.get('class_balanced', True)
+        self.train_proportion  = config.get('train_proportion', 0.8)
+        self.with_z            = config.get('with_z', False)
+        self.abundances        = None
+        self.train_set         = self.val_set = self.test_set = None
+        self.class_balanced    = config.get('class_balanced', True)
         self.external_trained_model = config.get('trained_model')
-        self.prob_column_name = config.setdefault('prob_column_name', "PROB_SCONE") # RK
-        self.verbose_data_loading = config.get('verbose_data_loading', False)  # 3rd Sept, 2025, A. Mitra - Enable detailed progress reporting during data loading
+        self.prob_column_name  = config.setdefault('prob_column_name', "PROB_SCONE") # RK
         
-        # Memory optimization settings  # 5th Sept, 2025, A. Mitra - User-configurable memory optimization options
-        self.memory_optimize = config.get('memory_optimize', True)  # 5th Sept, 2025, A. Mitra - Enable memory optimization by default
-        self.streaming_threshold = config.get('streaming_threshold', 10000)  # 5th Sept, 2025, A. Mitra - Use streaming prediction for datasets larger than this
-        self.force_streaming = config.get('force_streaming', False)  # 5th Sept, 2025, A. Mitra - Force streaming regardless of dataset size
-        self.gc_frequency = config.get('gc_frequency', 50)  # 5th Sept, 2025, A. Mitra - Garbage collection frequency (batches)
-        self.enable_dynamic_batch_size = config.get('enable_dynamic_batch_size', True)  # 8th Sept, 2025, A. Mitra - Enable adaptive batch sizing
-        self.enable_micro_batching = config.get('enable_micro_batching', True)  # 8th Sept, 2025, A. Mitra - Enable micro-batching for memory efficiency
-        self.micro_batch_size = config.get('micro_batch_size', 4)  # 8th Sept, 2025, A. Mitra - Size of micro-batches within main batches
-        self.enable_model_quantization = config.get('enable_model_quantization', False)  # 8th Sept, 2025, A. Mitra - Enable model quantization for inference
-        self.quantization_method = config.get('quantization_method', 'dynamic')  # 8th Sept, 2025, A. Mitra - dynamic, float16, or int8
-        self.enable_disk_caching = config.get('enable_disk_caching', False)  # 8th Sept, 2025, A. Mitra - Enable disk-based caching for intermediate results
-        self.disk_cache_dir = config.get('disk_cache_dir', '/tmp/scone_cache')  # 8th Sept, 2025, A. Mitra - Directory for disk cache
-        self.ultra_low_memory_mode = config.get('ultra_low_memory_mode', False)  # 8th Sept, 2025, A. Mitra - Enable maximum memory reduction
-        self.memory_target_gb = config.get('memory_target_gb', 50)  # 8th Sept, 2025, A. Mitra - Target memory usage in GB
-        self.dry_run_mode = config.get('dry_run_mode', False)  # 8th Sept, 2025, A. Mitra - Test mode without data loading
-        self.debug_pause_mode = config.get('debug_pause_mode', False)  # 8th Sept, 2025, A. Mitra - Add pauses for memory inspection
-        self.pause_duration = config.get('pause_duration', 30)  # 8th Sept, 2025, A. Mitra - Pause duration in seconds
+        # Sep 2025 A.Mitra: check memory optimization flags
+        self.verbose_data_loading = config.get('verbose_data_loading', False) 
+        self.memory_optimize       = config.get('memory_optimize', True) 
+        self.streaming_threshold   = config.get('streaming_threshold', 10000) 
+        self.force_streaming       = config.get('force_streaming', False)  
+        self.gc_frequency = config.get('gc_frequency', 50) 
+        self.enable_dynamic_batch_size = config.get('enable_dynamic_batch_size', True)  
+        self.enable_micro_batching = config.get('enable_micro_batching', True)  
+        self.micro_batch_size      = config.get('micro_batch_size', 4)  
+        self.enable_model_quantization = config.get('enable_model_quantization', False) 
+        self.quantization_method   = config.get('quantization_method', 'dynamic')  
+        self.enable_disk_caching   = config.get('enable_disk_caching', False)  
+        self.disk_cache_dir        = config.get('disk_cache_dir', '/tmp/scone_cache') 
+        self.ultra_low_memory_mode = config.get('ultra_low_memory_mode', False) 
+        self.memory_target_gb      = config.get('memory_target_gb', 50) 
+        self.dry_run_mode          = config.get('dry_run_mode', False) 
+        self.pause_duration        = config.get('pause_duration', 30)  
         
-        # Debug flag system for development/testing  # 3rd Sept, 2025, A. Mitra - Flexible system for switching between implementations
-        self.debug_flag = config.get('debug_flag', 0)  # 3rd Sept, 2025, A. Mitra - Allow runtime switching between legacy/refactored code
-        self._setup_debug_modes()  # 3rd Sept, 2025, A. Mitra - Configure debug behavior based on flag value
-
-        self.LEGACY = 'sim_fraction' in config
-        self.REFAC  = not self.LEGACY
-        logging.info(f"LEGACY code: {self.LEGACY}")
+        self.debug_flag = config.get('debug_flag', 0)  
+        self._setup_debug_modes()  
 
         return
     
-    def _configure_tf_memory(self):  # 5th Sept, 2025, A. Mitra - Configure TensorFlow for optimal memory usage
-        """Configure TensorFlow memory settings for large dataset processing."""
-        # Enable memory growth for GPUs to avoid pre-allocating all memory  # 5th Sept, 2025, A. Mitra - Prevent GPU memory hogging
+    def _configure_tf_memory(self):  
+        """
+        Created Sep 5 2205 by A.Mitra
+        Configure TensorFlow memory settings for large dataset processing.
+        """
+        # Enable memory growth for GPUs to avoid pre-allocating all memory  
         gpus = tf.config.experimental.list_physical_devices('GPU')
         if gpus:
             try:
                 for gpu in gpus:
-                    tf.config.experimental.set_memory_growth(gpu, True)  # 5th Sept, 2025, A. Mitra - Allow gradual GPU memory allocation
+                    tf.config.experimental.set_memory_growth(gpu, True) 
                 logging.info(f"Configured memory growth for {len(gpus)} GPU(s)")
             except RuntimeError as e:
                 logging.warning(f"Failed to configure GPU memory growth: {e}")
         
-        # Set mixed precision for memory efficiency (if supported)  # 5th Sept, 2025, A. Mitra - Use less memory per operation
+        # Set mixed precision for memory efficiency (if supported) 
         try:
             policy = tf.keras.mixed_precision.Policy('mixed_float16')
             tf.keras.mixed_precision.set_global_policy(policy)
@@ -122,18 +121,20 @@ class SconeClassifier():
         except Exception as e:
             logging.info(f"Mixed precision not enabled: {e}")
         
-        # Configure dataset options for memory efficiency  # 5th Sept, 2025, A. Mitra - Optimize dataset processing
-        tf.config.threading.set_intra_op_parallelism_threads(0)  # 5th Sept, 2025, A. Mitra - Use all available CPU cores
-        tf.config.threading.set_inter_op_parallelism_threads(0)  # 5th Sept, 2025, A. Mitra - Parallelize between operations
+        # Configure dataset options for memory efficiency  
+        tf.config.threading.set_intra_op_parallelism_threads(0)  
+        tf.config.threading.set_inter_op_parallelism_threads(0)  
     
-    def _setup_debug_modes(self):  # 3rd Sept, 2025, A. Mitra - New method to centralize debug flag configuration for easy maintenance
-        """Setup debug modes based on debug_flag value.
+    def _setup_debug_modes(self):  
+        """
+        Created Sep 2025 by A.Mitra
+        Setup debug modes based on debug_flag value.
         
         Debug flag meanings:
-        0    = Production mode (default) - uses legacy retrieve_data  # 3rd Sept, 2025, A. Mitra - Changed default to use legacy implementation for stability
+        0    = Production mode (default) - uses legacy retrieve_data 
         1    = Verbose logging
-        901  = Use refactored retrieve_data with basic logging  # 3rd Sept, 2025, A. Mitra - Refactored implementation with enhanced monitoring
-        902  = Use refactored retrieve_data with verbose logging  # 3rd Sept, 2025, A. Mitra - Refactored with detailed progress tracking
+        901  = Use refactored retrieve_data with basic logging  
+        902  = Use refactored retrieve_data with verbose logging 
         1000+ = Reserved for future debug modes
         """
         
@@ -147,7 +148,7 @@ class SconeClassifier():
         
         # Apply debug settings
         if self.debug_flag == self.DEBUG_MODES['PRODUCTION']:
-            logging.info("Debug Mode: Production mode - using LEGACY retrieve_data")  # 3rd Sept, 2025, A. Mitra - Default now uses legacy for stability
+            logging.info("Debug Mode: Production mode - using LEGACY retrieve_data") 
         elif self.debug_flag == self.DEBUG_MODES['VERBOSE']:
             self.verbose_data_loading = True
             logging.info("Debug Mode: Verbose logging enabled")
@@ -158,6 +159,10 @@ class SconeClassifier():
             logging.info("Debug Mode: Using REFACTORED retrieve_data with verbose logging")
         elif self.debug_flag > 0:
             logging.info(f"Debug Mode: Custom debug flag {self.debug_flag}")
+
+
+        return
+        # end _setup_debug_modes
 
     def write_summary_file(self, history):
 
@@ -238,7 +243,6 @@ class SconeClassifier():
         predict_file = os.path.join(self.output_path, PREDICT_CSV_FILE_BASE)
         pd.DataFrame(predict_dict).to_csv(predict_file, index=False) 
 
-        if self.LEGACY : return
 
         # re-write csv file with snid as first column, and with prob_preds
         # renamed based on user input key prob_column_name.
@@ -332,11 +336,11 @@ class SconeClassifier():
             logging.info(f"Running scone prediction on full dataset of {size} examples")
             predict_dict, acc = self.predict(dataset)
             
-            # Note: Due to TensorFlow's lazy evaluation, actual data processing   # 3rd Sept, 2025, A. Mitra - Important note for users about TF behavior
+            # Note: Due to TensorFlow's lazy evaluation, actual data processing   
+            # 3rd Sept, 2025, A. Mitra - Important note for users about TF behavior
             # happens during model.predict() above, not during dataset creation
-            
-            self.log_memory_usage("After prediction")  # 3rd Sept, 2025, A. Mitra - Monitor memory usage after prediction completes
-            self._debug_pause_with_memory_report("Prediction completed")  # 8th Sept, 2025, A. Mitra - Pause after prediction
+            self.log_memory_usage("After prediction")  
+            self._debug_pause_with_memory_report("Prediction completed") 
             self.write_predict_csv_file(predict_dict)
             history = { "accuracy": [acc] }
         else :
@@ -430,36 +434,40 @@ class SconeClassifier():
                                                    custom_objects={"Reshape": self.Reshape})
 
         if not self.trained_model:
-            raise RuntimeError('model has not been trained! call `train` on the SconeClassifier instance before predict!')
+            raise RuntimeError('model has not been trained! " \
+            "call `train` on the SconeClassifier instance before predict!')
 
-        # Monitor and adjust memory settings if needed  # 8th Sept, 2025, A. Mitra - Proactive memory management
+        # Monitor and adjust memory settings if needed 
         self._monitor_and_adjust_memory_settings()
         
-        # Apply model quantization for inference if enabled  # 8th Sept, 2025, A. Mitra - Reduce model memory footprint
+        # Apply model quantization for inference if enabled
         if self.enable_model_quantization and self.mode == MODE_PREDICT:
             self.trained_model = self._apply_model_quantization(self.trained_model)
 
-        return self._predict_with_memory_optimization(dataset)  # 5th Sept, 2025, A. Mitra - Intelligent memory-optimized prediction
+        return self._predict_with_memory_optimization(dataset) 
     
-    def _monitor_and_adjust_memory_settings(self):  # 8th Sept, 2025, A. Mitra - Real-time memory monitoring and optimization escalation
+    def _monitor_and_adjust_memory_settings(self): 
         """
+        Created Sep 2025 by A. Mitra
         Monitor memory usage and automatically escalate optimization strategies.
         """
         try:
             current_memory_gb = psutil.Process().memory_info().rss / (1024**3)
-            memory = psutil.virtual_memory()
-            memory_usage_pct = (memory.used / memory.total) * 100
-            available_gb = memory.available / (1024**3)
+            memory            = psutil.virtual_memory()
+            memory_usage_pct  = (memory.used / memory.total) * 100
+            available_gb      = memory.available / (1024**3)
             
             # Log current memory state
-            logging.info(f"Memory monitoring: Current usage: {current_memory_gb:.1f}GB, System: {memory_usage_pct:.1f}%, Available: {available_gb:.1f}GB")
+            logging.info(f"Memory monitoring: Current usage: {current_memory_gb:.1f}GB, " \
+                         f"System: {memory_usage_pct:.1f}%, Available: {available_gb:.1f}GB")
             
-            # Auto-escalate optimizations based on memory pressure  # 8th Sept, 2025, A. Mitra - Dynamic optimization adjustment
+            # Auto-escalate optimizations based on memory pressure 
             escalated = False
             
             if current_memory_gb > self.memory_target_gb or memory_usage_pct > 85:
                 if not self.ultra_low_memory_mode:
-                    logging.warning(f"Memory target exceeded ({current_memory_gb:.1f}GB > {self.memory_target_gb}GB), enabling ultra-low memory mode")
+                    logging.warning(f"Memory target exceeded " \
+                                    f"({current_memory_gb:.1f}GB > {self.memory_target_gb}GB), enabling ultra-low memory mode")
                     self.ultra_low_memory_mode = True
                     escalated = True
                 
@@ -475,21 +483,23 @@ class SconeClassifier():
                     self.streaming_threshold = min(1000, self.streaming_threshold)
                     escalated = True
                 
-                # Reduce batch sizes aggressively  # 8th Sept, 2025, A. Mitra - Emergency batch size reduction
-                if current_memory_gb > self.memory_target_gb * 1.2:  # 8th Sept, 2025, A. Mitra - 20% over target
+                # Reduce batch sizes aggressively  # 8th Sept, 2025,
+                if current_memory_gb > self.memory_target_gb * 1.2:  #  20% over target
                     self.batch_size = max(1, self.batch_size // 8)
                     self.micro_batch_size = 1
-                    logging.warning(f"Emergency memory mode: reducing batch size to {self.batch_size}, micro-batch to 1")
+                    logging.warning(f"Emergency memory mode: reducing batch size to " \
+                                    f"{self.batch_size}, micro-batch to 1")
                     escalated = True
                     
-                    # Force immediate garbage collection  # 8th Sept, 2025, A. Mitra - Emergency cleanup
+                    # Force immediate garbage collection 
                     import gc
                     gc.collect()
                     
-                    # Check if memory reduced after cleanup  # 8th Sept, 2025, A. Mitra - Verify cleanup effectiveness
+                    # Check if memory reduced after cleanup  
                     new_memory_gb = psutil.Process().memory_info().rss / (1024**3)
                     memory_freed = current_memory_gb - new_memory_gb
-                    logging.info(f"Emergency cleanup freed {memory_freed:.1f}GB, new usage: {new_memory_gb:.1f}GB")
+                    logging.info(f"Emergency cleanup freed {memory_freed:.1f}GB, " \
+                                 f"new usage: {new_memory_gb:.1f}GB")
             
             if escalated:
                 logging.info("Memory optimization settings auto-escalated due to memory pressure")
@@ -686,8 +696,10 @@ class SconeClassifier():
             logging.warning(f"Could not calculate adaptive batch size: {e}, using original batch size: {base_batch_size}")
             return base_batch_size
     
-    def _predict_with_memory_optimization(self, dataset):  # 5th Sept, 2025, A. Mitra - Choose optimal prediction strategy based on dataset size and config
+    def _predict_with_memory_optimization(self, dataset): 
+
         """
+        # Created Sep 2025 by  A. Mitra 
         Choose between streaming and regular prediction based on dataset size and configuration.
         """
         if not self.memory_optimize:
@@ -713,13 +725,14 @@ class SconeClassifier():
         # Intelligent streaming decision based on available memory and dataset characteristics  # 8th Sept, 2025, A. Mitra - Enhanced decision logic
         actual_threshold = self._calculate_intelligent_threshold(dataset_size)
         
-        # Choose prediction method based on size and configuration  # 5th Sept, 2025, A. Mitra - Intelligent selection of prediction strategy
+        # Choose prediction method based on size and configuration  
         if self.force_streaming or dataset_size > actual_threshold:
-            logging.info(f"Using ultra-low memory prediction for dataset size: {dataset_size} (threshold: {actual_threshold})")
-            return self._predict_ultra_low_memory(dataset)  # 5th Sept, 2025, A. Mitra - Process files individually to minimize memory
+            logging.info(f"Using ultra-low memory prediction for dataset size: " \
+                         f"{dataset_size} (threshold: {actual_threshold})")
+            return self._predict_ultra_low_memory(dataset) 
         else:
             logging.info(f"Using optimized standard prediction for smaller dataset size: {dataset_size}")
-            return self._predict_optimized(dataset)  # 5th Sept, 2025, A. Mitra - Memory-optimized version of original method
+            return self._predict_optimized(dataset) 
 
     def _predict_streaming(self, dataset):  # 5th Sept, 2025, A. Mitra - Memory-efficient streaming prediction
         """
@@ -1258,12 +1271,14 @@ class SconeClassifier():
 
         return model
     
-    def _debug_pause_with_memory_report(self, stage_name):  # 8th Sept, 2025, A. Mitra - Pause execution for memory analysis
+    def _debug_pause_with_memory_report(self, stage_name):  
+
         """
+        Created Sep 8  2025 by A. Mitra 
         Pause execution and provide detailed memory report for debugging.
         """
-        if not self.debug_pause_mode:
-            return
+
+        if not self.pause_duration == 0: return # RK fix
             
         # Detailed memory reporting  # 8th Sept, 2025, A. Mitra - Comprehensive memory analysis
         process = psutil.Process()
@@ -1380,49 +1395,52 @@ class SconeClassifier():
 
         np.random.shuffle(filenames)
         logging.info(f"Found {len(filenames)} heatmap files")
-        logging.info(f"First random heatmap file: {filenames[0]}")
+        logging.info(f"First randomly shiffled heatmap file: {filenames[0]}")
         
-        # Show first few files for debugging  # 3rd Sept, 2025, A. Mitra - Help users verify correct files are being loaded
+        # Show first few files for debugging  (A.Mitra)
         if len(filenames) > 3:
-            logging.info(f"Loading files including: {filenames[:3]}")  # 3rd Sept, 2025, A. Mitra - Display sample of files being processed
+            logging.info(f"Loading files including: {filenames[:3]}") 
         
-        # Calculate total size of files to be loaded  # 3rd Sept, 2025, A. Mitra - Inform users about expected data volume
-        total_size_mb = sum(os.path.getsize(f) for f in filenames) / (1024 * 1024)  # 3rd Sept, 2025, A. Mitra - Convert bytes to MB for readability
-        logging.info(f"Total data size to load: {total_size_mb:.1f} MB")  # 3rd Sept, 2025, A. Mitra - Show total data size to help users plan resource usage
+        # Calculate total size of files to be loaded 
+        total_size_mb = sum(os.path.getsize(f) for f in filenames) / (1024 * 1024)  
+        logging.info(f"Total data size to load: {total_size_mb:.1f} MB") 
 
-        # Implement memory-mapped access for large datasets  # 8th Sept, 2025, A. Mitra - Reduce memory pressure from file I/O
-        if total_size_mb > 1000 and self.memory_optimize:  # 8th Sept, 2025, A. Mitra - Use memory mapping for datasets > 1GB
+        # Implement memory-mapped access for large datasets 
+        if total_size_mb > 1000 and self.memory_optimize:  
             logging.info("Large dataset detected, using memory-mapped file access")
             raw_dataset = self._create_memory_mapped_dataset(filenames)
         else:
             raw_dataset = tf.data.TFRecordDataset(filenames, num_parallel_reads=80)
             logging.info(f"Dataset created with 80 parallel readers")
 
-        # Apply disk caching if enabled  # 8th Sept, 2025, A. Mitra - Cache processed data to disk to avoid reprocessing
+        # Apply disk caching if enabled  
         if self.enable_disk_caching:
             raw_dataset = self._apply_disk_caching(raw_dataset)
 
         return raw_dataset
 
-    def _create_memory_mapped_dataset(self, filenames):  # 8th Sept, 2025, A. Mitra - Memory-mapped file access for large datasets
+
+    def _create_memory_mapped_dataset(self, filenames): 
+
         """
+        Created Sep 2025 by A.Mitra
         Create a TensorFlow dataset using memory-mapped files to reduce memory usage.
         """
         try:
             logging.info("Creating memory-mapped dataset for efficient large file access")
             
-            # Use single-threaded reading for memory-mapped access  # 8th Sept, 2025, A. Mitra - Avoid memory overhead from parallel readers
+            # Use single-threaded reading for memory-mapped access  
             raw_dataset = tf.data.TFRecordDataset(filenames, num_parallel_reads=1)
             
-            # Apply interleaving for better I/O efficiency  # 8th Sept, 2025, A. Mitra - Process files in round-robin fashion
+            # Apply interleaving for better I/O efficiency 
             def create_single_file_dataset(filename):
                 return tf.data.TFRecordDataset([filename], num_parallel_reads=1)
             
             filenames_dataset = tf.data.Dataset.from_tensor_slices(filenames)
             raw_dataset = filenames_dataset.interleave(
                 create_single_file_dataset,
-                cycle_length=min(4, len(filenames)),  # 8th Sept, 2025, A. Mitra - Interleave 4 files at once
-                num_parallel_calls=1,  # 8th Sept, 2025, A. Mitra - Single-threaded for memory efficiency
+                cycle_length=min(4, len(filenames)),  # Interleave 4 files at once
+                num_parallel_calls=1,                 #  Single-threaded for memory efficiency
                 deterministic=False
             )
             
@@ -1511,49 +1529,54 @@ class SconeClassifier():
             # Normal mode (at least 10 reports)  # 3rd Sept, 2025, A. Mitra - Less frequent updates for normal operation
             report_interval = min(1000, max(100, dataset_size // 10)) if dataset_size > 0 else 1000  # 3rd Sept, 2025, A. Mitra - Balanced reporting frequency
         
-        def process_with_progress(x):  # 3rd Sept, 2025, A. Mitra - Inner function to process data with progress tracking
-            self._chunk_counter['count'] += 1  # 3rd Sept, 2025, A. Mitra - Increment record counter
+        def process_with_progress(x):  
+            # Created Sept, 2025, A. Mitra 
+            # Inner function to process data with progress tracking
+            self._chunk_counter['count'] += 1  #  Increment record counter
             
-            # Only report progress during actual processing, not during setup  # 3rd Sept, 2025, A. Mitra - Avoid confusing progress reports during TF pipeline setup
-            # Skip the first record which is just pipeline verification  # 3rd Sept, 2025, A. Mitra - TF processes first record for pipeline verification
+            # Only report progress during actual processing, not during setup  
+            # Avoid confusing progress reports during TF pipeline setup
+            # Skip the first record which is just pipeline verification
+            # TF processes first record for pipeline verification
             if self._chunk_counter['count'] > 1:
-                # Report progress at intervals  # 3rd Sept, 2025, A. Mitra - Regular progress updates
+                # Report progress at intervals  
                 if self._chunk_counter['count'] % report_interval == 0:
-                    elapsed = time.time() - self._chunk_counter['start_time']  # 3rd Sept, 2025, A. Mitra - Calculate processing time
-                    rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0  # 3rd Sept, 2025, A. Mitra - Calculate processing rate
-                    memory_mb = self.process.memory_info().rss / 1024 / 1024  # 3rd Sept, 2025, A. Mitra - Monitor current memory usage
-                    progress_pct = (self._chunk_counter['count'] / dataset_size * 100) if dataset_size > 0 else 0  # 3rd Sept, 2025, A. Mitra - Calculate completion percentage
+                    elapsed = time.time() - self._chunk_counter['start_time']  # Calculate processing time
+                    rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0  #  Calculate process rate
+                    memory_mb = self.process.memory_info().rss / 1024 / 1024  # Monitor current memory usage
+                    progress_pct = (self._chunk_counter['count'] / dataset_size * 100) if dataset_size > 0 else 0  # Calculate completion percentage
                     
-                    logging.info(f"Processing record {self._chunk_counter['count']}/{dataset_size} ({progress_pct:.1f}%) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")  # 3rd Sept, 2025, A. Mitra - Comprehensive progress report
+                    logging.info(f"Processing record {self._chunk_counter['count']}/{dataset_size} ({progress_pct:.1f}%) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")  # Comprehensive progress report
                     
-                    # Verbose mode shows estimated time remaining  # 3rd Sept, 2025, A. Mitra - Additional info for verbose users
+                    # Verbose mode shows estimated time remaining  #  Additional info for verbose users
                     if self.verbose_data_loading:
-                        remaining = dataset_size - self._chunk_counter['count']  # 3rd Sept, 2025, A. Mitra - Calculate remaining records
-                        eta = remaining / rate if rate > 0 else 0  # 3rd Sept, 2025, A. Mitra - Estimate completion time
-                        logging.info(f"  Estimated time remaining: {eta:.1f}s")  # 3rd Sept, 2025, A. Mitra - Show ETA to user
+                        remaining = dataset_size - self._chunk_counter['count']  # Calculate remaining records
+                        eta = remaining / rate if rate > 0 else 0  # Estimate completion time
+                        logging.info(f"  Estimated time remaining: {eta:.1f}s")  # Show ETA to user
                 
-                # Also report at 25%, 50%, 75% milestones  # 3rd Sept, 2025, A. Mitra - Show progress at key completion milestones
+                # Also report at 25%, 50%, 75% milestones  
                 elif dataset_size > 0:
-                    progress_pct = self._chunk_counter['count'] / dataset_size * 100  # 3rd Sept, 2025, A. Mitra - Calculate current progress percentage
-                    if abs(progress_pct - 25) < 0.5 or abs(progress_pct - 50) < 0.5 or abs(progress_pct - 75) < 0.5:  # 3rd Sept, 2025, A. Mitra - Check if at milestone
-                        elapsed = time.time() - self._chunk_counter['start_time']  # 3rd Sept, 2025, A. Mitra - Calculate elapsed time
-                        rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0  # 3rd Sept, 2025, A. Mitra - Calculate processing rate
-                        memory_mb = self.process.memory_info().rss / 1024 / 1024  # 3rd Sept, 2025, A. Mitra - Check memory usage at milestone
-                        logging.info(f"Progress: {progress_pct:.0f}% ({self._chunk_counter['count']}/{dataset_size}) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")  # 3rd Sept, 2025, A. Mitra - Report milestone progress
+                    progress_pct = self._chunk_counter['count'] / dataset_size * 100  # Calculate current progress percentage
+                    if abs(progress_pct - 25) < 0.5 or abs(progress_pct - 50) < 0.5 or abs(progress_pct - 75) < 0.5:  
+                        # Check if at milestone
+                        elapsed = time.time() - self._chunk_counter['start_time']  # Calculate elapsed time
+                        rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0  #  Calculate processing rate
+                        memory_mb = self.process.memory_info().rss / 1024 / 1024  # Check memory usage at milestone
+                        logging.info(f"Progress: {progress_pct:.0f}% ({self._chunk_counter['count']}/{dataset_size}) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")  # Report milestone progress
             
-            return get_images(x, self.input_shape, self.with_z)  # 3rd Sept, 2025, A. Mitra - Process the actual data using existing get_images function
+            return get_images(x, self.input_shape, self.with_z)  # Process  data using existing get_images function
         
-        # Apply processing with progress tracking  # 3rd Sept, 2025, A. Mitra - Create data processing pipeline with monitoring
+        # Apply processing with progress tracking 
         dataset = raw_dataset.map(
-            process_with_progress,   # 3rd Sept, 2025, A. Mitra - Use progress-tracking wrapper function
-            num_parallel_calls=tf.data.AUTOTUNE  # 3rd Sept, 2025, A. Mitra - Let TF optimize parallelism automatically
-        ).ignore_errors()  # 3rd Sept, 2025, A. Mitra - Skip corrupted records gracefully
+            process_with_progress,   # Use progress-tracking wrapper function
+            num_parallel_calls=tf.data.AUTOTUNE  # Let TF optimize parallelism automatically
+        ).ignore_errors()  # Skip corrupted records gracefully
         
-        # Use prefetching for better performance and memory management  # 3rd Sept, 2025, A. Mitra - Overlap I/O with computation
-        dataset = dataset.prefetch(tf.data.AUTOTUNE)  # 3rd Sept, 2025, A. Mitra - TF manages prefetch buffer size automatically
+        # Use prefetching for better performance and memory management  - Overlap I/O with computation
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)  #  TF manages prefetch buffer size automatically
         
-        # Note: actual counting happens during iteration  # 3rd Sept, 2025, A. Mitra - Important note about TF's lazy evaluation
-        logging.info(f"Dataset pipeline created with {tf.data.AUTOTUNE} parallel processing")  # 3rd Sept, 2025, A. Mitra - Inform about automatic optimization
+        # Note: actual counting happens during iteration  # Important note about TF's lazy evaluation
+        logging.info(f"Dataset pipeline created with {tf.data.AUTOTUNE} parallel processing")  
         
         return dataset, dataset_size
     
@@ -1712,9 +1735,11 @@ class SconeClassifierIaModels(SconeClassifier):
 
 def get_args():
 
-    parser = argparse.ArgumentParser(  # 3rd Sept, 2025, A. Mitra - Enhanced argument parser with detailed help
-        description='SCONE (Supernova Classification with Neural Networks) - Train or predict using heatmap data',  # 3rd Sept, 2025, A. Mitra - Descriptive tool description
-        formatter_class=argparse.RawDescriptionHelpFormatter,  # 3rd Sept, 2025, A. Mitra - Preserve formatting in help text
+    # Sep 2025: updates and monor refactor from A.Mitra: add args to debug and to monitor memory
+
+    parser = argparse.ArgumentParser( 
+        description='SCONE (Supernova Classification with Neural Networks) - Train or predict using heatmap data', 
+        formatter_class=argparse.RawDescriptionHelpFormatter,  
         epilog="""  # 3rd Sept, 2025, A. Mitra - Detailed help section with examples
 Debug flag values:
   0    Production mode (default) - uses legacy retrieve_data  # 3rd Sept, 2025, A. Mitra - Stable default
@@ -1735,53 +1760,76 @@ Examples:
         """
     )
 
-    parser.add_argument('--config_path',   # 3rd Sept, 2025, A. Mitra - Enhanced with required flag for clarity
-                       type=str, 
-                       required=True,  # 3rd Sept, 2025, A. Mitra - Made requirement explicit
-                       help='Path to YAML configuration file (required)')  # 3rd Sept, 2025, A. Mitra - Clear help message
+    msg = 'Path to YAML configuration file (required)'
+    parser.add_argument('--config_path',  type=str,  required=True,  help=msg )
 
-    parser.add_argument('--heatmaps_subdir',   # 3rd Sept, 2025, A. Mitra - Enhanced help message
-                       type=str, 
-                       default=HEATMAPS_SUBDIR_DEFAULT,
-                       help=f'Alternative heatmaps subdirectory name (default: {HEATMAPS_SUBDIR_DEFAULT})')  # 3rd Sept, 2025, A. Mitra - Show default value
+    msg = f'Alternative heatmaps subdirectory name (default: {HEATMAPS_SUBDIR_DEFAULT})'
+    parser.add_argument('--heatmaps_subdir', type=str, default=HEATMAPS_SUBDIR_DEFAULT, help=msg)
 
-    parser.add_argument('--debug_flag',   # 3rd Sept, 2025, A. Mitra - New debug flag argument for development
-                       type=int, 
-                       default=None,  # 3rd Sept, 2025, A. Mitra - None allows config file to take precedence
-                       metavar='N',  # 3rd Sept, 2025, A. Mitra - Clear placeholder in help
-                       help='Debug flag for development/testing (0=production, 1=verbose, 900-902=implementation testing). Overrides config file.')  # 3rd Sept, 2025, A. Mitra - Comprehensive help message
+    msg = 'Debug flag for development/testing (0=production, 1=verbose, >1 -> specific test)'
+    parser.add_argument('--debug_flag', type=int, default=None,  metavar='N', help=msg)
 
-    parser.add_argument('--force_streaming',   # 8th Sept, 2025, A. Mitra - Memory optimization control
-                       action='store_true',  # 8th Sept, 2025, A. Mitra - Boolean flag
-                       help='Force streaming prediction regardless of dataset size (overrides config)')  # 8th Sept, 2025, A. Mitra - Clear description
+    msg = 'Force streaming prediction regardless of dataset size (default=True)'
+    parser.add_argument('--force_streaming',  action='store_true',  help=msg)
 
-    parser.add_argument('--no_streaming',   # 8th Sept, 2025, A. Mitra - Disable streaming option
-                       action='store_true',  # 8th Sept, 2025, A. Mitra - Boolean flag  
-                       help='Disable streaming prediction and use regular method (overrides config)')  # 8th Sept, 2025, A. Mitra - Clear description
+    msg = 'Disable streaming prediction and use regular method (overrides config)'
+    parser.add_argument('--no_streaming',  action='store_true', help=msg)
 
-    parser.add_argument('--streaming_threshold',   # 8th Sept, 2025, A. Mitra - Configurable threshold
-                       type=int, 
-                       default=None,  # 8th Sept, 2025, A. Mitra - None allows config file to take precedence
-                       metavar='N',  # 8th Sept, 2025, A. Mitra - Clear placeholder
-                       help='Dataset size threshold for automatic streaming (default: 10000). Overrides config file.')  # 8th Sept, 2025, A. Mitra - Helpful description
+    msg = 'Dataset size threshold for automatic streaming (default: 10000). Overrides config file.'
+    parser.add_argument('--streaming_threshold', type=int, default=None, metavar='N', help=msg)
 
-    parser.add_argument('--dry_run',   # 8th Sept, 2025, A. Mitra - Dry run mode for baseline memory testing
-                       action='store_true',  # 8th Sept, 2025, A. Mitra - Boolean flag
-                       help='Run in dry run mode to test baseline memory usage without loading data')  # 8th Sept, 2025, A. Mitra - Clear description
+    msg = 'Run in dry run mode to test baseline memory usage without loading data'
+    parser.add_argument('--dry_run', action='store_true', help=msg)
 
-    parser.add_argument('--debug_pause',   # 8th Sept, 2025, A. Mitra - Debug pause mode for memory inspection
-                       action='store_true',  # 8th Sept, 2025, A. Mitra - Boolean flag  
-                       help='Enable debug pause mode with memory inspection pauses')  # 8th Sept, 2025, A. Mitra - Clear description
-
-    parser.add_argument('--pause_duration',   # 8th Sept, 2025, A. Mitra - Configurable pause duration
-                       type=int, 
-                       default=30,  # 8th Sept, 2025, A. Mitra - Default 30 seconds
-                       metavar='SECONDS',  # 8th Sept, 2025, A. Mitra - Clear placeholder
-                       help='Duration of debug pauses in seconds (default: 30)')  # 8th Sept, 2025, A. Mitra - Helpful description
+    msg = 'pause (seconds) for memory inspection (e.g. using pmap in separate terminal)'
+    parser.add_argument('--debug_pause', type=int, default=0, help = msg)
 
     args = parser.parse_args()
     return args
 
+
+def override_scone_config(args, scone_config):
+
+    # created Sep 2025 by A.Mitra and R.Kessler
+
+    # Handle debug_flag: command-line overrides config file  
+    if args.debug_flag is not None:
+        scone_config['debug_flag'] = args.debug_flag  
+        logging.info(f"Debug flag set from command line: {args.debug_flag}") 
+    elif 'debug_flag' not in scone_config:
+        scone_config['debug_flag'] = 0  # Default value  
+    else:
+        logging.info(f"Debug flag from config: {scone_config['debug_flag']}")  
+
+
+    # Handle streaming options: command-line overrides config file  
+    if args.force_streaming:
+        scone_config['force_streaming'] = True
+        logging.info("Force streaming enabled from command line")
+    elif args.no_streaming:
+        scone_config['force_streaming'] = False
+        scone_config['memory_optimize'] = False 
+        logging.info("Streaming disabled from command line")
+    
+    if args.streaming_threshold is not None:
+        scone_config['streaming_threshold'] = args.streaming_threshold
+        logging.info(f"Streaming threshold set from command line: {args.streaming_threshold}")
+    
+    # Handle debug and dry run arguments  # 8th Sept, 2025, A. Mitra - Handle new debugging arguments
+    if args.dry_run:
+        scone_config['dry_run_mode'] = True
+        logging.info("Dry run mode enabled from command line")
+    
+    if args.debug_pause:
+        scone_config['pause_duration'] = args.debug_pause
+        logging.info(f"Debug pause mode enabled with {args.debug_pause} second duration")
+    
+    # Validate streaming arguments 
+    if args.force_streaming and args.no_streaming:
+        logging.error("Error: --force_streaming and --no_streaming cannot be used together")
+        sys.exit(1)
+
+    return
 
 # ===============================================
 #   MAIN
@@ -1800,43 +1848,10 @@ if __name__ == "__main__":
     # define full path to heatmaps based on subdir
     scone_config['heatmaps_path'] = os.path.join(scone_config['output_path'],args.heatmaps_subdir)
 
-    # Handle debug_flag: command-line overrides config file  # 3rd Sept, 2025, A. Mitra - Implement priority system for debug flag
-    if args.debug_flag is not None:
-        scone_config['debug_flag'] = args.debug_flag  # 3rd Sept, 2025, A. Mitra - Command-line takes highest priority
-        logging.info(f"Debug flag set from command line: {args.debug_flag}")  # 3rd Sept, 2025, A. Mitra - Inform user about source
-    elif 'debug_flag' not in scone_config:
-        scone_config['debug_flag'] = 0  # Default value  # 3rd Sept, 2025, A. Mitra - Production mode as default
-    else:
-        logging.info(f"Debug flag from config: {scone_config['debug_flag']}")  # 3rd Sept, 2025, A. Mitra - Show config file value being used
+    # Sep 2025: allow some command line args to override config block
+    override_scone_config(args, scone_config)
 
-    # Handle streaming options: command-line overrides config file  # 8th Sept, 2025, A. Mitra - Implement streaming control overrides
-    if args.force_streaming:
-        scone_config['force_streaming'] = True
-        logging.info("Force streaming enabled from command line")
-    elif args.no_streaming:
-        scone_config['force_streaming'] = False
-        scone_config['memory_optimize'] = False  # 8th Sept, 2025, A. Mitra - Disable all memory optimization
-        logging.info("Streaming disabled from command line")
-    
-    if args.streaming_threshold is not None:
-        scone_config['streaming_threshold'] = args.streaming_threshold
-        logging.info(f"Streaming threshold set from command line: {args.streaming_threshold}")
-    
-    # Handle debug and dry run arguments  # 8th Sept, 2025, A. Mitra - Handle new debugging arguments
-    if args.dry_run:
-        scone_config['dry_run_mode'] = True
-        logging.info("Dry run mode enabled from command line")
-    
-    if args.debug_pause:
-        scone_config['debug_pause_mode'] = True
-        scone_config['pause_duration'] = args.pause_duration
-        logging.info(f"Debug pause mode enabled with {args.pause_duration}s pauses")
-    
-    # Validate streaming arguments  # 8th Sept, 2025, A. Mitra - Prevent conflicting arguments
-    if args.force_streaming and args.no_streaming:
-        logging.error("Error: --force_streaming and --no_streaming cannot be used together")
-        sys.exit(1)
-
+    # start scone process
     SconeClassifier(scone_config).run()
 
     # ==== END MAIN ===
