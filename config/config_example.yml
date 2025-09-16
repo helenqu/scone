@@ -50,3 +50,33 @@ train_proportion: 0.8
 val_proportion: 0.1
 has_ids: True
 with_z: False # classification with/without redshift
+
+### MEMORY OPTIMIZATION SETTINGS ###  # 8th Sept, 2025, A. Mitra - Comprehensive memory optimization section
+# Basic memory optimization
+memory_optimize: True              # Enable memory optimization features (default: True)
+force_streaming: False             # Force streaming prediction regardless of size (default: False)
+streaming_threshold: 10000         # Auto-streaming for datasets larger than this (default: 10000)
+gc_frequency: 50                   # Garbage collection frequency in batches (default: 50)
+verbose_data_loading: False        # Enable detailed progress reporting (default: False)
+
+# Advanced memory optimization (NEW) 
+enable_dynamic_batch_size: True    # Enable adaptive batch sizing based on memory pressure (default: True)
+enable_micro_batching: True        # Enable micro-batching for extreme memory efficiency (default: True)
+micro_batch_size: 4                # Size of micro-batches within main batches (default: 4)
+
+# Model optimization for inference
+enable_model_quantization: False   # Enable model quantization for reduced memory usage (default: False)
+quantization_method: "dynamic"     # Quantization method: "dynamic", "float16" (default: "dynamic")
+
+# Disk caching and memory-mapped I/O
+enable_disk_caching: False         # Enable disk-based caching for repeated runs (default: False)
+disk_cache_dir: "/tmp/scone_cache" # Directory for disk cache (default: "/tmp/scone_cache")
+
+# Ultra-low memory mode for extreme memory constraints (NEW)
+ultra_low_memory_mode: False       # Enable maximum memory reduction strategies (default: False)
+memory_target_gb: 50               # Target memory usage in GB - system will try to stay under this (default: 50)
+
+# Debug and testing modes (NEW)
+dry_run_mode: False                # Test baseline memory usage without loading data (default: False)
+debug_pause_mode: False            # Enable pauses for memory inspection during execution (default: False)
+pause_duration: 30                 # Duration of debug pauses in seconds (default: 30)
