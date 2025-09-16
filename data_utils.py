@@ -37,6 +37,8 @@ def stratified_split(dataset, train_proportion, types, include_test_set, class_b
     by_type_data_lengths = {k: sum([1 for _ in v]) for k,v in by_type_data_lists.items()}
     print(f"number of samples per label: {by_type_data_lengths}")
 
+    val_proportion = 0.5*(1-train_proportion) if include_test_set else 1-train_proportion
+
     if class_balance:
         min_amount = min(by_type_data_lengths.values())
         print(f"min number of samples: {min_amount}")
@@ -47,8 +49,6 @@ def stratified_split(dataset, train_proportion, types, include_test_set, class_b
     else:
         train_nums = {}
         val_nums = {}
-        
-    val_proportion = 0.5*(1-train_proportion) if include_test_set else 1-train_proportion
     
     train_set = None
     val_set = None
@@ -120,12 +120,22 @@ def extract_ids_and_batch(train_set, val_set, test_set, BATCH_SIZE):
 # requires:
 #   - cached_dataset
 def extract_ids_from_dataset(cached_dataset):
-    ids = tf.TensorArray(dtype=tf.int32,
-                      size=0,
-                      dynamic_size=True)
+    # Memory-optimized version: balance between speed and memory efficiency
+    # Use streaming approach to avoid storing all data in memory at once
+    ids_list = []
+    
+    # First pass: extract only IDs (minimal memory impact)
+    for heatmap, label, snid in cached_dataset:
+        # Handle both dict and tensor formats for snid
+        if isinstance(snid, dict):
+            ids_list.append(snid["id"].numpy())
+        else:
+            ids_list.append(snid.numpy())
+    
+    # Create dataset without IDs using functional mapping (memory efficient)
     dataset = cached_dataset.map(lambda heatmap, label, snid: (heatmap, label))
-    ids = cached_dataset.reduce(ids, lambda ids, x: ids.write(ids.size(), x[2]))
-    return ids.stack().numpy(), dataset
+    
+    return np.array(ids_list, dtype=np.int32), dataset
 
 # get number of examples per label in dataset
 # requires:
@@ -133,7 +143,11 @@ def extract_ids_from_dataset(cached_dataset):
 def get_dataset_makeup(dataset):
     relative_abundance = {}
     for i, elem in enumerate(dataset):
-        sntype = elem[1].numpy()
+        # Handle both dict and tensor formats for label
+        if isinstance(elem[1], dict):
+            sntype = elem[1]["label"].numpy()
+        else:
+            sntype = elem[1].numpy()
         relative_abundance[sntype] = 1 if sntype not in relative_abundance else relative_abundance[sntype] + 1
 
     print(relative_abundance)
