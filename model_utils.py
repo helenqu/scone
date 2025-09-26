@@ -348,6 +348,7 @@ class SconeClassifier():
                 self._debug_pause_with_memory_report("Raw dataset loaded")  # Pause after raw data loading
 
 
+            t_predict_start = time.time()
             
             debug_flag = self.debug_flag
             DEBUG_MODE_LIST = [self.DEBUG_MODES['REFAC_RETRIEVE'], 
@@ -380,7 +381,6 @@ class SconeClassifier():
             predict_dict, acc = self.predict(dataset)
             
             self.print_predict_time(t_predict_start, size)  # RK
-
 
             # Note: Due to TensorFlow's lazy evaluation, actual data processing   
             # 3rd Sept, 2025, A. Mitra - Important note for users about TF behavior
