@@ -1,7 +1,8 @@
 # base program for create_heatmaps
 #
 # Aug 22 2025: fix get_hdf5_ids_name() to be more robust and not rely on SNIaMODEL in FITS file name
-#
+# Sep 12 2025: remove self.LEGACY and self.REFAC .. keep only REFAC code
+
 import numpy as np
 import os, sys, logging
 import pandas as pd
@@ -40,9 +41,12 @@ class CreateHeatmapsBase(abc.ABC):
         self.SIM_GENTYPE_TO_CLASS = config.setdefault("SIM_GENTYPE_TO_CLASS",{}) 
         self.band_to_wave         = config.setdefault("band_to_wave", None) 
 
-        self.REFAC  = len(self.SIM_GENTYPE_TO_CLASS) > 0  or \
-                      config.setdefault('prob_column_name',None)
-        self.LEGACY = not self.REFAC
+        
+        # xxxxxx mark delete Sep 12 2025 R.Kessler xxxxxx
+        #self.REFAC  = len(self.SIM_GENTYPE_TO_CLASS) > 0  or \
+        #              config.setdefault('prob_column_name',None)
+        #self.LEGACY = not self.REFAC
+        # xxxxxxx end mark xxx
 
         self.IS_DATA_REAL = len(self.SIM_GENTYPE_TO_CLASS) == 0
         self.IS_DATA_SIM  = len(self.SIM_GENTYPE_TO_CLASS) >  0
@@ -51,20 +55,12 @@ class CreateHeatmapsBase(abc.ABC):
         # RK 4.2.2024: if type_to_name map is not already read from sim-data readme,
         #              then use legacy feature to read it from user config file.
 
-        if self.REFAC :
-            map_source       = "sim-readme (refac)"
-            self.categorical = False  # disable for now; maybe restore later
-            self.types       = [SIMTAG_nonIa, SIMTAG_Ia]
-            self.type_to_int_label  = {SIMTAG_nonIa: 0,   SIMTAG_Ia: 1}
-            self.sn_type_id_to_name = self.SIM_GENTYPE_TO_CLASS
 
-        else:
-            # legacy feature reading hard-wired map from scone-input config
-            map_source = "config (legacy)"
-            self.categorical        = config["categorical"]
-            self.types              = config["types"]
-            self.sn_type_id_to_name = config["sn_type_id_to_name"] 
-            self.type_to_int_label  = {type_str: 1 if type_str == "SNIa" or type_str == "Ia" else 0 for type_str in self.types} if not self.categorical else {v:i for i,v in enumerate(sorted(self.types))} # int label for classification
+        map_source       = "sim-readme (refac)"
+        self.categorical = False  # disable for now; maybe restore later
+        self.types       = [SIMTAG_nonIa, SIMTAG_Ia]
+        self.type_to_int_label  = {SIMTAG_nonIa: 0,   SIMTAG_Ia: 1}
+        self.sn_type_id_to_name = self.SIM_GENTYPE_TO_CLASS
 
 
         logging.info(f"")
@@ -75,11 +71,7 @@ class CreateHeatmapsBase(abc.ABC):
 
         # - - - - - - - -
         # restricting number of heatmaps that are made
-        if self.LEGACY: 
-            self.ids_path = config.get("ids_path", None)
-        else:
-            # refactored, RK
-            self.hdf5_select_file = config.get("hdf5_select_file", None)
+        self.hdf5_select_file = config.get("hdf5_select_file", None)
 
         self.load_data()
 
@@ -114,10 +106,7 @@ class CreateHeatmapsBase(abc.ABC):
         if self.band_to_wave is None:
             self.band_to_wave = get_band_to_wave(survey) # legacy : hard-wired params
 
-        if self.LEGACY:
-            ids_path = self.ids_path
-        else:
-            ids_path = self.hdf5_select_file      # refactored, RK
+        ids_path = self.hdf5_select_file      # refactored, RK
 
         if ids_path:
             logging.info(f"Open snid-select file:  {ids_path}")
@@ -152,10 +141,6 @@ class CreateHeatmapsBase(abc.ABC):
         # Aug 22 2025: fix logic to be more robust
 
         ids_base_name = "ids"
-
-        if self.LEGACY:
-            ids_name = ids_base_name
-            return ids_name
 
         if self.IS_DATA_REAL:
             ids_name = ids_base_name
@@ -256,9 +241,6 @@ class CreateHeatmapsBase(abc.ABC):
                          f"{n_lc_write} of {n_lc_read} light curves.")
 
             # - - - - - 
-            # write REPORT information to done.log file :
-            if self.LEGACY:
-                self.write_done_file_legacy(output_path)  # original/unformatted
 
             self.write_summary_file(heatmap_file)     # Mar 2024 RK - formatted summary 
             return
@@ -292,7 +274,8 @@ class CreateHeatmapsBase(abc.ABC):
 
         reject  = False
         ps_dict = self.prescale_heatmaps_dict
-        if ps_dict is None or self.LEGACY : 
+        # xxx mark 9/12/2025 if ps_dict is None or self.LEGACY : 
+        if ps_dict is None  : 
             return reject  # never reject for predict mode
 
         ps = ps_dict[sn_name]
