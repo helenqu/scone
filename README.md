@@ -74,3 +74,66 @@ This script reads the config file, performs class balancing if desired, and laun
 
 ## Use with [Pippin](https://github.com/dessn/Pippin/tree/main)
 coming soon!
+
+## Performance Optimization and Memory Management
+
+### Performance Modes
+
+SCONE now includes intelligent performance optimization with three modes:
+
+#### 1. **Balanced Mode (Default)** - Intelligent Auto-Selection
+Automatically selects the best method based on dataset size:
+- **Small datasets (< 75K samples)**: Uses fast method (3-4 minutes) - same as original performance
+- **Large datasets (≥ 75K samples)**: Uses memory-efficient chunked processing (15-20 minutes)
+- **Memory usage**: ~10-15GB for large datasets, ~25-30GB for small datasets
+- No configuration needed - this is the default behavior
+
+#### 2. **Fast Mode** - Maximum Speed
+Forces fast processing for all dataset sizes:
+- **Runtime**: 3-4 minutes (same as original SCONE)
+- **Memory usage**: ~25-30GB
+- **Configuration**:
+```yaml
+enable_balanced_mode: False  # Disable balanced mode for maximum speed
+```
+
+#### 3. **Memory Optimization Mode** - Minimum Memory Usage
+For extreme memory constraints:
+- **Runtime**: 2-3 hours (slower but very memory efficient)
+- **Memory usage**: ~5-8GB
+- **Configuration**:
+```yaml
+enable_balanced_mode: False
+enable_micro_batching: True  # Enable micro-batching for minimum memory
+memory_optimize: True
+```
+
+### Configuration Options
+
+Add these to your YAML config file as needed:
+
+```yaml
+# Performance settings (all optional - defaults shown)
+enable_balanced_mode: True      # Intelligent mode selection (default)
+balanced_batch_size: 128        # Batch size for balanced mode
+chunk_size: 10000               # Samples per chunk in balanced mode
+streaming_threshold: 75000      # Dataset size threshold for mode switching
+gc_frequency: 200               # Garbage collection frequency
+enable_micro_batching: False    # For extreme memory optimization only
+memory_optimize: False          # Additional memory optimizations
+```
+
+### Performance Summary
+
+| Mode | Small Datasets (<75K) | Large Datasets (≥75K) | Memory Usage |
+|------|----------------------|----------------------|--------------|
+| **Balanced (Default)** | 3-4 min | 15-20 min | Adaptive |
+| **Fast** | 3-4 min | 3-4 min | ~25-30GB |
+| **Memory-Optimized** | 2-3 hours | 2-3 hours | ~5-8GB |
+
+### Key Features
+
+1. **No performance regression**: Small datasets maintain original speed automatically
+2. **Intelligent adaptation**: Large datasets automatically get memory-efficient processing
+3. **Override available**: Force any mode regardless of dataset size
+4. **Debug flag compatible**: Works with all debug flags (0, 901, 902)

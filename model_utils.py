@@ -39,12 +39,33 @@ class SconeClassifier():
             return {}
 
     def __init__(self, config):
-        self.scone_config = config  
+        self.scone_config = config
         self.seed = config.get("seed", 42)
-        self.process = psutil.Process()  # 3rd Sept, 2025, A. Mitra - Initialize process object for memory monitoring
-        
-        # Memory optimization settings  # Configure TF for memory efficiency
-        self._configure_tf_memory()     # Apply memory optimization settings
+
+
+        # Debug flag system for development/testing - MUST be before other settings
+        self.debug_flag = config.get('debug_flag', 0)
+
+        # Get memory optimization settings early to determine if we need TF configuration
+        self.force_streaming = config.get('force_streaming', False)
+        default_memory_optimize = self.debug_flag != 0 if self.debug_flag is not None else False
+        self.memory_optimize = config.get('memory_optimize', default_memory_optimize)
+
+        # Configure TF memory BEFORE creating strategy (if needed)
+        if self.debug_flag != 0 or self.memory_optimize or self.force_streaming:
+            self._configure_tf_memory()  # Apply memory optimization settings
+
+        # Only initialize psutil when debugging or memory monitoring is needed
+        if self.debug_flag and self.debug_flag > 0:
+            self.process = psutil.Process()  # For memory monitoring
+        else:
+            self.process = None  # No monitoring for production mode
+
+        self.output_path    = config['output_path']
+        self.heatmaps_paths = config['heatmaps_paths'] if 'heatmaps_paths' in config else config['heatmaps_path'] # #TODO(6/21/23): eventually remove, for backwards compatibility
+        self.mode = config["mode"]
+
+
         self.strategy = tf.distribute.MirroredStrategy()
         self.batch_size_per_replica = config.get('batch_size', 32)
         self.batch_size = self.batch_size_per_replica * self.strategy.num_replicas_in_sync
@@ -72,31 +93,37 @@ class SconeClassifier():
         self.train_set         = self.val_set = self.test_set = None
         self.class_balanced    = config.get('class_balanced', True)
         self.external_trained_model = config.get('trained_model')
-        self.prob_column_name  = config.setdefault('prob_column_name', "PROB_SCONE") # RK
+
+        self.prob_column_name = config.setdefault('prob_column_name', "PROB_SCONE") # RK
+        self.verbose_data_loading = config.get('verbose_data_loading', False)  # 3rd Sept, 2025, A. Mitra - Enable detailed progress reporting during data loading
         
-        # Sep 2025 A.Mitra: check memory optimization flags
-
-        self.verbose_data_loading  = config.get('verbose_data_loading', False) 
-        self.memory_optimize       = config.get('memory_optimize', True) 
-        self.streaming_threshold   = config.get('streaming_threshold', 10000) 
-        self.force_streaming       = config.get('force_streaming', False)  
-        self.gc_frequency = config.get('gc_frequency', 50) 
-        self.enable_dynamic_batch_size = config.get('enable_dynamic_batch_size', True)  
-        self.enable_micro_batching = config.get('enable_micro_batching', True)  
-
-        self.micro_batch_size      = config.get('micro_batch_size', 4)  
-
-        self.enable_model_quantization = config.get('enable_model_quantization', False) 
-        self.quantization_method   = config.get('quantization_method', 'dynamic')  
-        self.enable_disk_caching   = config.get('enable_disk_caching', False)  
-        self.disk_cache_dir        = config.get('disk_cache_dir', '/tmp/scone_cache') 
-        self.ultra_low_memory_mode = config.get('ultra_low_memory_mode', False) 
-        self.memory_target_gb      = config.get('memory_target_gb', 50) 
-        self.dry_run_mode          = config.get('dry_run_mode', False) 
-        self.pause_duration        = config.get('pause_duration', 30)  
+        # Memory optimization settings (already set above for early TF config)
+        # BALANCED OPTIMIZATION: Memory-aware settings with acceptable runtime (3-4x nominal)
+        self.streaming_threshold = config.get('streaming_threshold', 75000)  # Balanced threshold
+        self.gc_frequency = config.get('gc_frequency', 200)  # Moderate GC frequency
+        self.enable_dynamic_batch_size = config.get('enable_dynamic_batch_size', False)  # Keep disabled
+        self.enable_micro_batching = config.get('enable_micro_batching', False)  # Disabled by default
+        self.micro_batch_size = config.get('micro_batch_size', 64)  # Larger micro-batches for balance
+        self.enable_balanced_mode = config.get('enable_balanced_mode', True)  # DEFAULT: balanced memory/speed mode
+        self.balanced_batch_size = config.get('balanced_batch_size', 128)  # Optimal batch size for balance
+        self.chunk_size = config.get('chunk_size', 1000)  # Process data in reasonable chunks
+        self.enable_model_quantization = config.get('enable_model_quantization', False)  # 8th Sept, 2025, A. Mitra - Enable model quantization for inference
+        self.quantization_method = config.get('quantization_method', 'dynamic')  # 8th Sept, 2025, A. Mitra - dynamic, float16, or int8
+        self.enable_disk_caching = config.get('enable_disk_caching', False)  # 8th Sept, 2025, A. Mitra - Enable disk-based caching for intermediate results
+        self.disk_cache_dir = config.get('disk_cache_dir', '/tmp/scone_cache')  # 8th Sept, 2025, A. Mitra - Directory for disk cache
+        self.ultra_low_memory_mode = config.get('ultra_low_memory_mode', False)  # 8th Sept, 2025, A. Mitra - Enable maximum memory reduction
+        self.memory_target_gb = config.get('memory_target_gb', 50)  # 8th Sept, 2025, A. Mitra - Target memory usage in GB
+        self.dry_run_mode = config.get('dry_run_mode', False)  # 8th Sept, 2025, A. Mitra - Test mode without data loading
+        self.debug_pause_mode = config.get('debug_pause_mode', False)  # 8th Sept, 2025, A. Mitra - Add pauses for memory inspection
+        self.pause_duration = config.get('pause_duration', 30)  # 8th Sept, 2025, A. Mitra - Pause duration in seconds
         
-        self.debug_flag = config.get('debug_flag', 0)  
-        self._setup_debug_modes()  
+        # Setup debug modes
+        self._setup_debug_modes()  # Configure debug behavior based on flag value
+
+        self.LEGACY = 'sim_fraction' in config
+        self.REFAC  = not self.LEGACY
+        logging.info(f"LEGACY code: {self.LEGACY}")
+
 
         return
     
@@ -288,7 +315,10 @@ class SconeClassifier():
 
         self.t_start = time.time()
         self.trained_model = None
-        self.log_memory_usage("Initial startup", False)  # Track memory usage at key stages for debugging
+
+        if self.process:  # Only log memory if debugging/monitoring is enabled
+            self.log_memory_usage("Initial startup")  # Track memory usage at key stages for debugging
+
 
         # Handle dry run mode 
         if self.dry_run_mode:
@@ -308,11 +338,16 @@ class SconeClassifier():
             history = history.history    
 
         elif self.mode == MODE_PREDICT:
-            # .xyz
-            t_predict_start = time.time()  # RK
-            self.log_memory_usage("Before loading dataset", False)             # Monitor memory before data loading
+
+            if self.process:  # Only log memory if debugging/monitoring is enabled
+                self.log_memory_usage("Before loading dataset")  # Monitor memory before data loading
             raw_dataset = self._load_dataset()
-            self.log_memory_usage("After loading raw dataset", True)          # Monitor memory after raw dataset creation
+            if self.process:  # Only log memory if debugging/monitoring is enabled
+                self.log_memory_usage("After loading raw dataset")  # Monitor memory after raw dataset creation
+            if self.debug_pause_mode:  # Only pause if explicitly enabled
+                self._debug_pause_with_memory_report("Raw dataset loaded")  # Pause after raw data loading
+
+
             
             debug_flag = self.debug_flag
             DEBUG_MODE_LIST = [self.DEBUG_MODES['REFAC_RETRIEVE'], 
@@ -332,9 +367,16 @@ class SconeClassifier():
             else:
                 sys.exit(f"n ABORT with undefined debug_flag = {debug_flag}")
             
-            self.log_memory_usage("Finished dataset setup", True)
+
+            if self.process:  # Only log memory if debugging/monitoring is enabled
+                self.log_memory_usage("Finished processing dataset setup")
+            if self.debug_pause_mode:  # Only pause if explicitly enabled
+                self._debug_pause_with_memory_report("Dataset processing completed")  # Pause after data processing
+
             
             logging.info(f"Running scone prediction on full dataset of {size} examples")
+            # Store dataset size for use in predict method
+            self._dataset_size = size
             predict_dict, acc = self.predict(dataset)
             
             self.print_predict_time(t_predict_start, size)  # RK
@@ -343,7 +385,13 @@ class SconeClassifier():
             # Note: Due to TensorFlow's lazy evaluation, actual data processing   
             # 3rd Sept, 2025, A. Mitra - Important note for users about TF behavior
             # happens during model.predict() above, not during dataset creation
-            self.log_memory_usage("After prediction", True)  
+
+            
+            if self.process:  # Only log memory if debugging/monitoring is enabled
+                self.log_memory_usage("After prediction")  # Monitor memory usage after prediction completes
+            if self.debug_pause_mode:  # Only pause if explicitly enabled
+                self._debug_pause_with_memory_report("Prediction completed")  # Pause after prediction
+
             self.write_predict_csv_file(predict_dict)
             history = { "accuracy": [acc] }
         else :
@@ -411,13 +459,10 @@ class SconeClassifier():
 
         return model, history
 
-    def log_memory_usage(self, code_location, do_pause): 
 
-        # Created Sep 2025 by A. Mitra
-        # Utility for real-time memory monitoring throughout processing
-        # Inputs:
-        #   code_location: brief name/description of location in code
-        #   do_pause     : bool T -> execute pause to enable further interrogation
+    def log_memory_usage(self, step_name):  # 3rd Sept, 2025, A. Mitra - New method for real-time memory monitoring throughout processing
+        if not self.process:  # Skip if process monitoring not initialized
+            return
 
         memory_info = self.process.memory_info()
         system_memory = psutil.virtual_memory()
@@ -462,32 +507,204 @@ class SconeClassifier():
 
     def predict(self, dataset, dataset_ids=None):
         if self.external_trained_model and not self.trained_model:
-            self.trained_model = models.load_model(self.external_trained_model, 
+            self.trained_model = models.load_model(self.external_trained_model,
                                                    custom_objects={"Reshape": self.Reshape})
 
         if not self.trained_model:
             raise RuntimeError('model has not been trained! " \
             "call `train` on the SconeClassifier instance before predict!')
 
-        # Monitor and adjust memory settings if needed 
+
+        # BALANCED MODE: New option for memory optimization with reasonable runtime
+        if self.enable_balanced_mode:
+            logging.info("Using BALANCED prediction mode - moderate memory optimization with 3-4x runtime")
+            return self._predict_balanced(dataset)
+
+        # For production mode OR when micro-batching is disabled, use fast legacy prediction
+        if self.debug_flag == 0 or not self.enable_micro_batching:
+            # Use the original, simple prediction method - identical to nominal version
+            return self._predict_legacy(dataset)
+
+        # Only do memory optimization if explicitly enabled via micro_batching
+        # Monitor and adjust memory settings if needed
         self._monitor_and_adjust_memory_settings()
-        
+
+
         # Apply model quantization for inference if enabled
         if self.enable_model_quantization and self.mode == MODE_PREDICT:
             self.trained_model = self._apply_model_quantization(self.trained_model)
 
-        return self._predict_with_memory_optimization(dataset) 
+
+        return self._predict_with_memory_optimization(dataset)  # Intelligent memory-optimized prediction
     
-    def _monitor_and_adjust_memory_settings(self): 
+    def _predict_legacy(self, dataset):
+        """Legacy prediction method - identical to nominal version."""
+        dataset = dataset.cache()  # otherwise the rest of the dataset operations won't return entries in the same order
+        dataset_no_ids = dataset.map(lambda image, label, *_: (image, label)).batch(self.batch_size)
+
+        predictions = self.trained_model.predict(dataset_no_ids, verbose=0)
+
+        if self.categorical:
+            predictions = np.argmax(predictions, axis=1)
+        predictions = predictions.flatten()
+
+        true_labels = dataset.map(lambda _, label, *args: label["label"])
+        df_dict = {'pred_labels': predictions, 'true_labels': list(true_labels.as_numpy_iterator())}
+        ids = dataset.map(lambda _, label, id_: id_["id"])
+        df_dict['snid'] = list(ids.as_numpy_iterator())
+
+        prediction_ints = np.round(predictions)
+        acc = float(np.count_nonzero((prediction_ints - list(true_labels.as_numpy_iterator())) == 0)) / len(prediction_ints)
+
+        return df_dict, acc
+
+    def _predict_balanced(self, dataset):
+        """
+        BALANCED prediction method - memory-aware with acceptable runtime (3-4x nominal).
+        Processes data in manageable chunks without extreme micro-batching.
+        Only applies to large datasets; small datasets use fast legacy method.
+        """
+        # First check dataset size - use fast method for small datasets
+        if hasattr(self, '_dataset_size') and self._dataset_size is not None:
+            dataset_size = self._dataset_size
+        else:
+            # Estimate dataset size
+            try:
+                dataset_size = tf.data.experimental.cardinality(dataset).numpy()
+                if dataset_size == tf.data.experimental.UNKNOWN_CARDINALITY:
+                    sample_size = min(1000, self.streaming_threshold // 10)
+                    sample_count = dataset.take(sample_size).reduce(0, lambda x, _: x + 1).numpy()
+                    dataset_size = self.streaming_threshold + 1 if sample_count == sample_size else sample_count
+            except:
+                dataset_size = self.streaming_threshold + 1  # Assume large on error
+
+        # For small datasets, use fast legacy method even in balanced mode
+        if dataset_size < self.streaming_threshold:
+            logging.info(f"Small dataset ({dataset_size} < {self.streaming_threshold}), using fast legacy method")
+            return self._predict_legacy(dataset)
+
+        # For large datasets, use balanced chunked processing
+        logging.info(f"Large dataset ({dataset_size} >= {self.streaming_threshold}), using balanced chunked processing")
+        if self.process:
+            self.log_memory_usage("Starting balanced prediction for large dataset")
+
+        # Use moderate batch size for good balance
+        batch_size = self.balanced_batch_size  # Default 128
+        chunk_size = self.chunk_size  # Default 1000 samples per chunk
+
+        # Initialize collections
+        all_predictions = []
+        all_true_labels = []
+        all_snids = []
+
+        total_correct = 0
+        total_samples = 0
+        chunk_count = 0
+        batch_count = 0
+
+        # Process dataset in chunks for memory efficiency
+        logging.info(f"Balanced mode: batch_size={batch_size}, chunk_size={chunk_size}")
+
+        # Create iterator for chunked processing
+        dataset_iter = iter(dataset)
+        processing_complete = False
+
+        while not processing_complete:
+            chunk_count += 1
+            chunk_data = []
+            chunk_labels = []
+            chunk_ids = []
+
+            # Collect a chunk of data
+            try:
+                for _ in range(chunk_size):
+                    image, label, id_ = next(dataset_iter)
+                    # Handle both dictionary and tensor formats
+                    if isinstance(image, dict):
+                        image_tensor = image['image']
+                    else:
+                        image_tensor = image
+                    chunk_data.append(image_tensor)
+                    chunk_labels.append(label["label"].numpy() if hasattr(label["label"], 'numpy') else label["label"])
+                    chunk_ids.append(id_["id"].numpy() if hasattr(id_["id"], 'numpy') else id_["id"])
+            except StopIteration:
+                processing_complete = True
+
+            if not chunk_data:
+                break
+
+            # Process chunk in batches
+            chunk_predictions = []
+            for i in range(0, len(chunk_data), batch_size):
+                batch_count += 1
+                batch_end = min(i + batch_size, len(chunk_data))
+                batch_images = tf.stack(chunk_data[i:batch_end])
+
+                # Predict on batch
+                batch_preds = self.trained_model.predict(batch_images, verbose=0)
+                if self.categorical:
+                    batch_preds = np.argmax(batch_preds, axis=1)
+                chunk_predictions.extend(batch_preds.flatten())
+
+                # Moderate frequency progress reporting
+                if batch_count % 50 == 0 and self.process:
+                    self.log_memory_usage(f"Processed {batch_count} batches, {total_samples + len(chunk_predictions)} samples")
+
+            # Accumulate chunk results
+            all_predictions.extend(chunk_predictions)
+            all_true_labels.extend(chunk_labels)
+            all_snids.extend(chunk_ids)
+
+            # Calculate chunk accuracy
+            chunk_correct = np.sum(np.round(chunk_predictions) == chunk_labels)
+            total_correct += chunk_correct
+            total_samples += len(chunk_predictions)
+
+            # Report chunk progress
+            if chunk_count % 5 == 0 or self.verbose_data_loading:
+                current_acc = total_correct / total_samples if total_samples > 0 else 0
+                logging.info(f"Processed chunk {chunk_count}, total samples: {total_samples}, accuracy: {current_acc:.4f}")
+
+            # Moderate garbage collection
+            if self.gc_frequency > 0 and chunk_count % 10 == 0:
+                import gc
+                gc.collect()
+
+            # Clear chunk data
+            del chunk_data, chunk_labels, chunk_ids, chunk_predictions
+
+        # Final accuracy
+        final_accuracy = total_correct / total_samples if total_samples > 0 else 0
+
+        # Create results
+        df_dict = {
+            'pred_labels': all_predictions,
+            'true_labels': all_true_labels,
+            'snid': all_snids
+        }
+
+        logging.info(f"Balanced prediction completed: {total_samples} samples in {chunk_count} chunks, accuracy: {final_accuracy:.4f}")
+        if self.process:
+            self.log_memory_usage("Completed balanced prediction")
+
+        return df_dict, final_accuracy
+
+    def _monitor_and_adjust_memory_settings(self):  # 8th Sept, 2025, A. Mitra - Real-time memory monitoring and optimization escalation
+
         """
         Created Sep 2025 by A. Mitra
         Monitor memory usage and automatically escalate optimization strategies.
         """
+        if not self.process:  # Skip if monitoring not initialized
+            return False
+
         try:
-            current_memory_gb = psutil.Process().memory_info().rss / (1024**3)
-            memory            = psutil.virtual_memory()
-            memory_usage_pct  = (memory.used / memory.total) * 100
-            available_gb      = memory.available / (1024**3)
+
+            current_memory_gb = self.process.memory_info().rss / (1024**3)
+            memory = psutil.virtual_memory()
+            memory_usage_pct = (memory.used / memory.total) * 100
+            available_gb = memory.available / (1024**3)
+
             
             # Log current memory state
             logging.info(f"Memory monitoring: Current usage: {current_memory_gb:.1f}GB, " \
@@ -686,42 +903,44 @@ class SconeClassifier():
                 current_memory_mb = current_usage_gb * 1024
                 
                 if current_memory_mb > target_memory_mb:
-                    # Already over target, use minimum batch size  # 8th Sept, 2025, A. Mitra - Emergency mode
-                    adaptive_batch_size = 1
-                    self.micro_batch_size = 1  # Force single-sample micro-batches
-                    logging.warning(f"Memory usage {current_usage_gb:.1f}GB exceeds target {self.memory_target_gb}GB, using minimum batch size: 1")
+
+                    # Over target, but use reasonable minimum for performance
+                    adaptive_batch_size = max(8, base_batch_size // 4)  # OPTIMIZED: minimum 8, not 1
+                    self.micro_batch_size = max(4, self.micro_batch_size // 2)  # OPTIMIZED: minimum 4
+                    logging.warning(f"Memory usage {current_usage_gb:.1f}GB exceeds target {self.memory_target_gb}GB, using batch size: {adaptive_batch_size}")
+
                 else:
                     # Calculate batch size to approach but not exceed target  # 8th Sept, 2025, A. Mitra - Conservative approach
                     remaining_memory_mb = target_memory_mb - current_memory_mb
-                    max_batch_samples = max(1, int((remaining_memory_mb * 0.3) / mb_per_sample))  # 8th Sept, 2025, A. Mitra - Use 30% of remaining
+                    max_batch_samples = max(8, int((remaining_memory_mb * 0.5) / mb_per_sample))  # OPTIMIZED: Use 50% of remaining, min 8
                     adaptive_batch_size = min(base_batch_size, max_batch_samples)
                     logging.info(f"Ultra-low memory mode: target {self.memory_target_gb}GB, current {current_usage_gb:.1f}GB, batch size: {adaptive_batch_size}")
                 
                 return adaptive_batch_size
             
             # Standard aggressive batch size reduction under memory pressure  # 8th Sept, 2025, A. Mitra - Original logic enhanced
-            if memory_usage_pct > 90:  # 8th Sept, 2025, A. Mitra - Ultra-critical memory pressure
-                adaptive_batch_size = 1
-                self.micro_batch_size = 1
+            if memory_usage_pct > 95:  # OPTIMIZED: Only at 95%, not 90%
+                adaptive_batch_size = max(4, base_batch_size // 8)  # OPTIMIZED: minimum 4, not 1
+                self.micro_batch_size = max(2, self.micro_batch_size // 2)
                 logging.warning(f"Ultra-critical memory pressure ({memory_usage_pct:.1f}%), using single-sample processing")
-            elif memory_usage_pct > 85:  # 8th Sept, 2025, A. Mitra - Critical memory pressure
-                adaptive_batch_size = max(1, base_batch_size // 16)  # 8th Sept, 2025, A. Mitra - More aggressive reduction
+            elif memory_usage_pct > 90:  # OPTIMIZED: 90% threshold
+                adaptive_batch_size = max(8, base_batch_size // 4)  # OPTIMIZED: Less aggressive
                 self.micro_batch_size = min(2, self.micro_batch_size)
                 logging.info(f"Critical memory pressure ({memory_usage_pct:.1f}%), reducing batch size from {base_batch_size} to {adaptive_batch_size}")
-            elif memory_usage_pct > 75:  # 8th Sept, 2025, A. Mitra - High memory pressure
-                adaptive_batch_size = max(1, base_batch_size // 8)  # 8th Sept, 2025, A. Mitra - Increased reduction
-                self.micro_batch_size = min(2, self.micro_batch_size)
+            elif memory_usage_pct > 80:  # OPTIMIZED: 80% threshold
+                adaptive_batch_size = max(16, base_batch_size // 2)  # OPTIMIZED: Only halve batch size
+                self.micro_batch_size = min(4, self.micro_batch_size)
                 logging.info(f"High memory pressure ({memory_usage_pct:.1f}%), reducing batch size from {base_batch_size} to {adaptive_batch_size}")
-            elif memory_usage_pct > 60:  # 8th Sept, 2025, A. Mitra - Moderate memory pressure
-                adaptive_batch_size = max(2, base_batch_size // 4)
+            elif memory_usage_pct > 70:  # OPTIMIZED: 70% threshold
+                adaptive_batch_size = max(16, base_batch_size // 2)  # OPTIMIZED: Higher minimum
                 logging.info(f"Moderate memory pressure ({memory_usage_pct:.1f}%), reducing batch size from {base_batch_size} to {adaptive_batch_size}")
-            elif available_memory_mb < 2000:  # 8th Sept, 2025, A. Mitra - Low available memory threshold increased
-                adaptive_batch_size = max(1, base_batch_size // 8)
+            elif available_memory_mb < 1000:  # OPTIMIZED: Lower threshold for action
+                adaptive_batch_size = max(8, base_batch_size // 4)  # OPTIMIZED: Higher minimum
                 logging.info(f"Low available memory ({available_memory_mb:.1f}MB), reducing batch size from {base_batch_size} to {adaptive_batch_size}")
             else:
                 # Calculate optimal batch size based on available memory  # 8th Sept, 2025, A. Mitra - Use memory efficiently when available
-                max_samples_in_memory = int((available_memory_mb * 0.2) / mb_per_sample)  # 8th Sept, 2025, A. Mitra - Reduced from 40% to 20%
-                adaptive_batch_size = min(base_batch_size, max(1, max_samples_in_memory))
+                max_samples_in_memory = int((available_memory_mb * 0.3) / mb_per_sample)  # OPTIMIZED: Use 30% for better performance
+                adaptive_batch_size = min(base_batch_size, max(8, max_samples_in_memory))  # OPTIMIZED: Minimum 8
                 if adaptive_batch_size != base_batch_size:
                     logging.info(f"Memory-optimized batch size: {adaptive_batch_size} (from {base_batch_size})")
             
@@ -740,31 +959,42 @@ class SconeClassifier():
         if not self.memory_optimize:
             logging.info("Memory optimization disabled, using original prediction method")
             return self._predict_original(dataset)
-        
-        # Estimate dataset size efficiently  # 5th Sept, 2025, A. Mitra - Quick size estimation without full iteration
-        try:
-            dataset_size = tf.data.experimental.cardinality(dataset).numpy()
-            if dataset_size == tf.data.experimental.UNKNOWN_CARDINALITY:
-                # For unknown cardinality, take a small sample to estimate  
-                sample_size = min(1000, self.streaming_threshold // 10)
-                sample_count = dataset.take(sample_size).reduce(0, lambda x, _: x + 1).numpy()
-                if sample_count == sample_size:
-                    logging.info(f"Dataset size > {sample_size}, estimating as large dataset")
-                    dataset_size = self.streaming_threshold + 1  # 5th Sept, 2025, A. Mitra - Force streaming for large datasets
-                else:
-                    dataset_size = sample_count  # 5th Sept, 2025, A. Mitra - Small dataset, exact count
-        except Exception as e:
-            logging.warning(f"Could not estimate dataset size: {e}, using streaming prediction")
-            dataset_size = self.streaming_threshold + 1  
-        
-        # Intelligent streaming decision based on available memory and dataset characteristics 
+
+
+        # Use stored dataset size if available (from retrieve_data)
+        if hasattr(self, '_dataset_size') and self._dataset_size is not None:
+            dataset_size = self._dataset_size
+            logging.info(f"Using known dataset size: {dataset_size}")
+        else:
+            # Estimate dataset size efficiently
+            try:
+                dataset_size = tf.data.experimental.cardinality(dataset).numpy()
+                if dataset_size == tf.data.experimental.UNKNOWN_CARDINALITY:
+                    # For unknown cardinality, take a small sample to estimate
+                    sample_size = min(1000, self.streaming_threshold // 10)
+                    sample_count = dataset.take(sample_size).reduce(0, lambda x, _: x + 1).numpy()
+                    if sample_count == sample_size:
+                        logging.info(f"Dataset size > {sample_size}, estimating as large dataset")
+                        dataset_size = self.streaming_threshold + 1  # Force streaming for large datasets
+                    else:
+                        dataset_size = sample_count  # Small dataset, exact count
+            except Exception as e:
+                logging.warning(f"Could not estimate dataset size: {e}, using streaming prediction")
+                dataset_size = self.streaming_threshold + 1  # Default to streaming on error
+
+        # For small datasets, ALWAYS use fast legacy method regardless of memory settings
+        if dataset_size < self.streaming_threshold and not self.force_streaming:
+            logging.info(f"Small dataset ({dataset_size} < {self.streaming_threshold}), using fast legacy prediction")
+            return self._predict_legacy(dataset)
+
+        # Intelligent streaming decision based on available memory and dataset characteristics
         actual_threshold = self._calculate_intelligent_threshold(dataset_size)
-  
-        # Choose prediction method based on size and configuration  
+
+        # Choose prediction method based on size and configuration
         if self.force_streaming or dataset_size > actual_threshold:
-            logging.info(f"Using ultra-low memory prediction for dataset size: " \
-                         f"{dataset_size} (threshold: {actual_threshold})")
-            return self._predict_ultra_low_memory(dataset) 
+            logging.info(f"Using ultra-low memory prediction for dataset size: {dataset_size} (threshold: {actual_threshold})")
+            return self._predict_ultra_low_memory(dataset)  # Process files individually to minimize memory
+
         else:
             logging.info(f"Using optimized standard prediction for smaller dataset size: {dataset_size}")
             return self._predict_optimized(dataset) 
@@ -827,14 +1057,16 @@ class SconeClassifier():
             total_correct += batch_correct
             total_samples += len(batch_predictions)
             
-            # Progress reporting 
-            if batch_count % 10 == 0 or self.verbose_data_loading:
+
+            # OPTIMIZED: Less frequent progress reporting
+            if batch_count % 50 == 0 or (self.verbose_data_loading and batch_count % 10 == 0):
+
                 current_acc = total_correct / total_samples if total_samples > 0 else 0
                 msg = f"Processed batch {batch_count}, n_samples={total_samples}, accuracy={current_acc:.3f}"
                 self.log_memory_usage(msg,False)
             
-            # Force garbage collection periodically to free memory  # 5th Sept, 2025, A. Mitra - Aggressive memory management
-            if batch_count % self.gc_frequency == 0:
+            # OPTIMIZED: Less frequent garbage collection
+            if batch_count % (self.gc_frequency * 2) == 0:  # Every 100 batches instead of 50
                 import gc
                 gc.collect()  # 5th Sept, 2025, A. Mitra - Free unused memory periodically
                 
@@ -976,8 +1208,8 @@ class SconeClassifier():
                 # Clear micro-batch immediately  # 8th Sept, 2025, A. Mitra - Aggressive memory management
                 del micro_batch, micro_predictions
                 
-                # Garbage collect frequently during micro-batching  # 8th Sept, 2025, A. Mitra - Keep memory usage minimal
-                if i % (self.micro_batch_size * 4) == 0:
+                # OPTIMIZED: Less frequent GC to reduce overhead - only when really needed
+                if self.gc_frequency > 0 and i % (self.micro_batch_size * 20) == 0:  # Much less frequent
                     import gc
                     gc.collect()
             
@@ -1002,11 +1234,14 @@ class SconeClassifier():
             total_correct += batch_correct
             total_samples += len(batch_predictions)
             
-            # Progress reporting and memory monitoring  # 8th Sept, 2025, A. Mitra - Track micro-batching progress
-            if batch_count % 20 == 0 or self.verbose_data_loading:
+
+            # OPTIMIZED: Much less frequent progress reporting to dramatically reduce overhead
+            # Only report every 1000 batches, or 100 if verbose mode
+            if batch_count % 1000 == 0 or (self.verbose_data_loading and batch_count % 100 == 0):
                 current_acc = total_correct / total_samples if total_samples > 0 else 0
-                msg = f"Micro-batched {batch_count} batches, n_samples={total_samples}, accuracy={current_acc:.3f}"
-                self.log_memory_usage(msg, False)
+                if self.process:  # Only log if monitoring enabled
+                    self.log_memory_usage(f"Micro-batched {batch_count} batches, samples: {total_samples}, accuracy: {current_acc:.3f}")
+
             
             # Clear batch variables  # 8th Sept, 2025, A. Mitra - Immediate cleanup
             del images, batch_predictions, batch_true_labels, batch_snids
@@ -1043,7 +1278,7 @@ class SconeClassifier():
         # Use ultra-small batch sizes for extreme memory efficiency  # 8th Sept, 2025, A. Mitra - Maximize memory savings
         ultra_batch_size = self._calculate_adaptive_batch_size(self.batch_size)
         if self.ultra_low_memory_mode:
-            ultra_batch_size = min(ultra_batch_size, 4)  # 8th Sept, 2025, A. Mitra - Cap batch size in ultra mode
+            ultra_batch_size = max(8, min(ultra_batch_size, 32))  # OPTIMIZED: Min 8, cap at 32 for better performance
         
         # Initialize collections for results with memory-efficient storage  # 8th Sept, 2025, A. Mitra - Use generators instead of lists
         def result_generator():
@@ -1059,13 +1294,13 @@ class SconeClassifier():
                 
                 # Process single file at a time  # 5th Sept, 2025, A. Mitra - Load and process one file, then release memory
                 try:
-                    file_dataset = tf.data.TFRecordDataset([filename], num_parallel_reads=1)
-                    file_dataset = file_dataset.map(lambda x: get_images(x, self.input_shape, self.with_z), num_parallel_calls=1)
+                    file_dataset = tf.data.TFRecordDataset([filename], num_parallel_reads=4)  # OPTIMIZED: Parallel reads
+                    file_dataset = file_dataset.map(lambda x: get_images(x, self.input_shape, self.with_z), num_parallel_calls=tf.data.AUTOTUNE)  # OPTIMIZED: Auto-tuned parallelism
                     file_dataset = file_dataset.apply(tf.data.experimental.ignore_errors())
                     
                     batch_count_in_file = 0
-                    # Process this file in ultra-small batches  # 8th Sept, 2025, A. Mitra - Even smaller batches than before
-                    for batch in file_dataset.batch(ultra_batch_size):
+                    # OPTIMIZED: Process with prefetching for better performance
+                    for batch in file_dataset.batch(ultra_batch_size).prefetch(2):
                         batch_count_in_file += 1
                         
                         # Immediate processing with minimal memory retention  # 8th Sept, 2025, A. Mitra - Process and release immediately
@@ -1083,20 +1318,22 @@ class SconeClassifier():
                             total_correct += batch_correct
                             total_samples += len(batch_predictions)
                         
-                        # Force immediate cleanup after each batch  # 8th Sept, 2025, A. Mitra - Aggressive memory management
+                        # OPTIMIZED: Less aggressive cleanup - only when really needed
                         del batch
-                        if batch_count_in_file % 5 == 0:  # 8th Sept, 2025, A. Mitra - Frequent garbage collection
+                        if self.gc_frequency > 0 and batch_count_in_file % 50 == 0:  # Much less frequent GC
                             import gc
                             gc.collect()
                     
                     # Clean up file dataset immediately  # 8th Sept, 2025, A. Mitra - Release file data
                     del file_dataset
                     
-                    # Progress report per file with memory check  # 8th Sept, 2025, A. Mitra - Monitor memory during processing
-                    if file_count % 1 == 0:  # 8th Sept, 2025, A. Mitra - Report after every file
+                    # OPTIMIZED: Less frequent progress reporting - every 10 files instead of every file
+                    if file_count % 10 == 0 or (self.verbose_data_loading and file_count % 5 == 0):
                         current_acc = total_correct / total_samples if total_samples > 0 else 0
-                        msg = f"Completed file {file_count}/{len(filenames)}, n_samples{total_samples}, accuracy={current_acc:.3f}"
-                        self.log_memory_usage(msg,False)
+
+                        if self.process:  # Only log if monitoring enabled
+                            self.log_memory_usage(f"Completed file {file_count}/{len(filenames)}, samples: {total_samples}, accuracy: {current_acc:.3f}")
+
                     
                     # Aggressive garbage collection after each file  # 8th Sept, 2025, A. Mitra - Force memory cleanup
                     import gc
@@ -1429,8 +1666,11 @@ class SconeClassifier():
             filenames = ["{}/{}".format(self.heatmaps_paths, f.name) for f in os.scandir(self.heatmaps_paths) if "tfrecord" in f.name]
 
         np.random.shuffle(filenames)
-        logging.info(f"Found {len(filenames)} heatmap files")
-        logging.info(f"First randomly shiffled heatmap file: {filenames[0]}")
+
+        self._num_files = len(filenames)  # Store for size estimation
+        logging.info(f"Found {self._num_files} heatmap files")
+        logging.info(f"First random heatmap file: {filenames[0]}")
+
         
         # Show first few files for debugging  (A.Mitra)
         if len(filenames) > 3:
@@ -1538,49 +1778,74 @@ class SconeClassifier():
         return dataset.apply(tf.data.experimental.ignore_errors()), dataset_size
 
 
-    def _retrieve_data(self, raw_dataset): 
-        # Created Sep 2025 by  A. Mitra 
-        # Memory-efficient processing using TensorFlow's built-in optimizations 
-        
-        # Track progress during data processing  
-        self._chunk_counter = {'count': 0, 'start_time': time.time()}  
-        
-        # Get size first for progress tracking  
-        logging.info("Calculating dataset size...")
-        dataset_size = tf.data.experimental.cardinality(raw_dataset).numpy()  # Use TF's efficient cardinality method
+
+    def _retrieve_data(self, raw_dataset):  # 3rd Sept, 2025, A. Mitra - New memory-efficient implementation with progress monitoring
+        # OPTIMIZED: Smarter dataset size estimation to avoid hanging
+        dataset_size = tf.data.experimental.cardinality(raw_dataset).numpy()
         if dataset_size == tf.data.experimental.UNKNOWN_CARDINALITY:
-            # Fallback if cardinality is unknown  
-            logging.info("Dataset size unknown, counting records...")
-            dataset_size = raw_dataset.reduce(0, lambda x, _: x + 1).numpy()  
-        
+            # Quick sample to estimate size - DON'T count full dataset for large files
+            sample_size = 1000  # Fixed sample size
+            logging.info(f"Dataset size unknown, sampling {sample_size} records...")
+            sample_count = raw_dataset.take(sample_size).reduce(0, lambda x, _: x + 1).numpy()
+
+            if sample_count < sample_size:
+                dataset_size = sample_count  # Small dataset, got exact count
+            else:
+                # Large dataset - estimate based on file count
+                if hasattr(self, '_num_files'):
+                    # Estimate ~365 samples per file (typical for LSST data)
+                    # 160 files * 365 = ~58,400 samples (typical for your dataset)
+                    dataset_size = self._num_files * 365
+                    logging.info(f"Large dataset detected, estimated ~{dataset_size} records based on {self._num_files} files")
+                else:
+                    # Conservative estimate for large dataset
+                    dataset_size = 50000  # Assume large
+                    logging.info(f"Large dataset detected, assuming {dataset_size} records")
+
         logging.info(f"Total dataset size: {dataset_size} records")
-        self._estimated_total_chunks = dataset_size
-        
-        # Determine reporting interval based on verbosity and dataset size  
+
+        # OPTIMIZED: Better threshold and processing choice
+        # Use 30K as threshold for simple processing (balanced approach)
+        simple_threshold = min(30000, self.streaming_threshold)
+
+        if dataset_size < simple_threshold:
+            logging.info(f"Small/medium dataset ({dataset_size} < {simple_threshold}), using fast processing")
+            # Use optimized simple method with better parallelism
+            dataset = raw_dataset.map(
+                lambda x: get_images(x, self.input_shape, self.with_z),
+                num_parallel_calls=tf.data.AUTOTUNE  # OPTIMIZED: Auto-tuned parallelism
+            ).apply(tf.data.experimental.ignore_errors()).prefetch(tf.data.AUTOTUNE)  # OPTIMIZED: Add prefetching
+            return dataset, dataset_size
+
+        # For large datasets, use moderate optimization (not ultra-aggressive)
+        logging.info(f"Large dataset ({dataset_size} >= {simple_threshold}), using moderate memory optimization")
+
+        # OPTIMIZED: Skip detailed progress tracking for better performance
         if self.verbose_data_loading:
-            # In verbose mode, report more frequently (at least 20 reports)  
-            report_interval = min(100, max(10, dataset_size // 20)) if dataset_size > 0 else 100  
-            logging.info(f"Verbose mode: Progress will be reported every {report_interval} records")  
+            self._chunk_counter = {'count': 0, 'start_time': time.time()}
         else:
-            # Normal mode (at least 10 reports) 
-            report_interval = min(1000, max(100, dataset_size // 10)) if dataset_size > 0 else 1000  
+            self._chunk_counter = None
+        # OPTIMIZED: Less frequent reporting for better performance
+        if self.verbose_data_loading:
+            report_interval = min(500, max(100, dataset_size // 20)) if dataset_size > 0 else 500
+            logging.info(f"Verbose mode: Progress will be reported every {report_interval} records")
+        else:
+            # Non-verbose: minimal reporting
+            report_interval = 10000  # Report very infrequently
         
-        def process_with_progress(x):  
-            # Created Sept, 2025, A. Mitra 
-            # Inner function to process data with progress tracking
-            self._chunk_counter['count'] += 1  #  Increment record counter
+        def process_with_progress(x):  # Inner function to process data
+            if self._chunk_counter:
+                self._chunk_counter['count'] += 1  # Only count if tracking enabled
             
-            # Only report progress during actual processing, not during setup  
-            # Avoid confusing progress reports during TF pipeline setup
-            # Skip the first record which is just pipeline verification
-            # TF processes first record for pipeline verification
-            if self._chunk_counter['count'] > 1:
-                # Report progress at intervals  
+            # Only report progress if tracking is enabled
+            if self._chunk_counter and self._chunk_counter['count'] > 1:
+                # Report progress at intervals  # 3rd Sept, 2025, A. Mitra - Regular progress updates
                 if self._chunk_counter['count'] % report_interval == 0:
-                    elapsed = time.time() - self._chunk_counter['start_time']  # Calculate processing time
-                    rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0  #  Calculate process rate
-                    memory_mb = self.process.memory_info().rss / 1024 / 1024  # Monitor current memory usage
-                    progress_pct = (self._chunk_counter['count'] / dataset_size * 100) if dataset_size > 0 else 0  # Calculate completion percentage
+                    elapsed = time.time() - self._chunk_counter['start_time']  # 3rd Sept, 2025, A. Mitra - Calculate processing time
+                    rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0  # 3rd Sept, 2025, A. Mitra - Calculate processing rate
+                    memory_mb = self.process.memory_info().rss / 1024 / 1024 if self.process else 0  # Monitor memory if available
+                    progress_pct = (self._chunk_counter['count'] / dataset_size * 100) if dataset_size > 0 else 0  # 3rd Sept, 2025, A. Mitra - Calculate completion percentage
+
                     
                     logging.info(f"Processing record {self._chunk_counter['count']}/{dataset_size} ({progress_pct:.1f}%) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")  # Comprehensive progress report
                     
@@ -1592,22 +1857,30 @@ class SconeClassifier():
                 
                 # Also report at 25%, 50%, 75% milestones  
                 elif dataset_size > 0:
-                    progress_pct = self._chunk_counter['count'] / dataset_size * 100  # Calculate current progress percentage
-                    if abs(progress_pct - 25) < 0.5 or abs(progress_pct - 50) < 0.5 or abs(progress_pct - 75) < 0.5:  
-                        # Check if at milestone
-                        elapsed = time.time() - self._chunk_counter['start_time']  # Calculate elapsed time
-                        rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0  #  Calculate processing rate
-                        memory_mb = self.process.memory_info().rss / 1024 / 1024  # Check memory usage at milestone
-                        logging.info(f"Progress: {progress_pct:.0f}% ({self._chunk_counter['count']}/{dataset_size}) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")  # Report milestone progress
+
+                    progress_pct = self._chunk_counter['count'] / dataset_size * 100  # 3rd Sept, 2025, A. Mitra - Calculate current progress percentage
+                    if abs(progress_pct - 25) < 0.5 or abs(progress_pct - 50) < 0.5 or abs(progress_pct - 75) < 0.5:  # 3rd Sept, 2025, A. Mitra - Check if at milestone
+                        elapsed = time.time() - self._chunk_counter['start_time']  # 3rd Sept, 2025, A. Mitra - Calculate elapsed time
+                        rate = self._chunk_counter['count'] / elapsed if elapsed > 0 else 0  # 3rd Sept, 2025, A. Mitra - Calculate processing rate
+                        memory_mb = self.process.memory_info().rss / 1024 / 1024 if self.process else 0  # Check memory at milestone
+                        logging.info(f"Progress: {progress_pct:.0f}% ({self._chunk_counter['count']}/{dataset_size}) | Rate: {rate:.1f} records/sec | Memory: {memory_mb:.1f} MB")  # 3rd Sept, 2025, A. Mitra - Report milestone progress
             
-            return get_images(x, self.input_shape, self.with_z)  # Process  data using existing get_images function
+            return get_images(x, self.input_shape, self.with_z)  # 3rd Sept, 2025, A. Mitra - Process the actual data using existing get_images function
         
-        # - - - - - -- 
-        # Apply processing with progress tracking 
-        dataset = raw_dataset.map(
-            process_with_progress,   # Use progress-tracking wrapper function
-            num_parallel_calls=tf.data.AUTOTUNE  # Let TF optimize parallelism automatically
-        )   # RK this causes crash .ignore_errors()  # Skip corrupted records gracefully
+        # OPTIMIZED: Use simple processing if not verbose
+        if self._chunk_counter:
+            # With progress tracking
+            dataset = raw_dataset.map(
+                process_with_progress,
+                num_parallel_calls=tf.data.AUTOTUNE
+            ).ignore_errors()
+        else:
+            # Without progress tracking (faster)
+            dataset = raw_dataset.map(
+                lambda x: get_images(x, self.input_shape, self.with_z),
+                num_parallel_calls=tf.data.AUTOTUNE
+            ).ignore_errors()
+
         
         # Use prefetching for better performance and memory management  - Overlap I/O with computation
         dataset = dataset.prefetch(tf.data.AUTOTUNE)  #  TF manages prefetch buffer size automatically
