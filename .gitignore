@@ -1,1 +1,4 @@
 **/__pycache__
+
+# local backups
+*.bak_*
