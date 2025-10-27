@@ -461,7 +461,7 @@ class SconeClassifier():
 
         # BALANCED MODE: New option for memory optimization with reasonable runtime
         if self.enable_balanced_mode:
-            logging.info("Using BALANCED prediction mode - moderate memory optimization with 3-4x runtime")
+            logging.info("Using BALANCED prediction mode")
             return self._predict_balanced(dataset)
 
         # For production mode OR when micro-batching is disabled, use fast legacy prediction
@@ -519,6 +519,35 @@ class SconeClassifier():
                     dataset_size = self.streaming_threshold + 1 if sample_count == sample_size else sample_count
             except:
                 dataset_size = self.streaming_threshold + 1  # Assume large on error
+
+        # INTELLIGENT FIX: Also apply size-based threshold adjustment here if not already done
+        # This handles the case where _retrieve_data didn't adjust (e.g., small records but many of them)
+        if hasattr(self, '_total_size_mb') and not hasattr(self, '_threshold_already_adjusted'):
+            avg_mb_per_record = self._total_size_mb / dataset_size if dataset_size > 0 else 0
+            total_size_gb = self._total_size_mb / 1024
+
+            # Apply same intelligent logic as in _retrieve_data
+            # Rule 1: Very large records (>10 MB each) need aggressive streaming
+            if avg_mb_per_record > 10:
+                adjusted_threshold = min(self.streaming_threshold, max(5000, int(50000 / avg_mb_per_record)))
+                if adjusted_threshold < self.streaming_threshold:
+                    logging.info(f"Large records detected ({avg_mb_per_record:.1f} MB/record), adjusting streaming threshold from {self.streaming_threshold} to {adjusted_threshold}")
+                    self.streaming_threshold = adjusted_threshold
+                    self._threshold_already_adjusted = True
+            # Rule 2: Large total size (>40 GB) needs streaming even with smaller records
+            elif total_size_gb > 40:
+                # Scale threshold based on size: 40-100GB -> 30K, >100GB -> 20K, >200GB -> 10K
+                if total_size_gb > 200:
+                    adjusted_threshold = min(self.streaming_threshold, 10000)
+                elif total_size_gb > 100:
+                    adjusted_threshold = min(self.streaming_threshold, 20000)
+                else:  # 40-100 GB
+                    adjusted_threshold = min(self.streaming_threshold, 30000)
+
+                if adjusted_threshold < self.streaming_threshold:
+                    logging.info(f"Large total dataset ({total_size_gb:.1f} GB), adjusting streaming threshold from {self.streaming_threshold} to {adjusted_threshold}")
+                    self.streaming_threshold = adjusted_threshold
+                    self._threshold_already_adjusted = True
 
         # For small datasets, use fast legacy method even in balanced mode
         if dataset_size < self.streaming_threshold:
@@ -1597,6 +1626,9 @@ class SconeClassifier():
         total_size_mb = sum(os.path.getsize(f) for f in filenames) / (1024 * 1024)  # 3rd Sept, 2025, A. Mitra - Convert bytes to MB for readability
         logging.info(f"Total data size to load: {total_size_mb:.1f} MB")  # 3rd Sept, 2025, A. Mitra - Show total data size to help users plan resource usage
 
+        # Store total size for intelligent streaming threshold adjustment
+        self._total_size_mb = total_size_mb
+
         # Implement memory-mapped access for large datasets  # 8th Sept, 2025, A. Mitra - Reduce memory pressure from file I/O
         if total_size_mb > 1000 and self.memory_optimize:  # 8th Sept, 2025, A. Mitra - Use memory mapping for datasets > 1GB
             logging.info("Large dataset detected, using memory-mapped file access")
@@ -1716,6 +1748,36 @@ class SconeClassifier():
                     logging.info(f"Large dataset detected, assuming {dataset_size} records")
 
         logging.info(f"Total dataset size: {dataset_size} records")
+
+        # INTELLIGENT FIX: Adjust streaming threshold based on actual file sizes
+        # If we have large files (>100GB total) but estimated few records, this indicates
+        # bloated records that will cause memory issues with legacy method
+        if hasattr(self, '_total_size_mb') and not hasattr(self, '_threshold_already_adjusted'):
+            avg_mb_per_record = self._total_size_mb / dataset_size if dataset_size > 0 else 0
+            total_size_gb = self._total_size_mb / 1024
+
+            # Strategy: Use total dataset size to determine appropriate threshold
+            # Rule 1: Very large records (>10 MB each) need aggressive streaming
+            if avg_mb_per_record > 10:
+                adjusted_threshold = min(self.streaming_threshold, max(5000, int(50000 / avg_mb_per_record)))
+                logging.info(f"Large records detected ({avg_mb_per_record:.1f} MB/record), adjusting streaming threshold from {self.streaming_threshold} to {adjusted_threshold}")
+                self._original_streaming_threshold = self.streaming_threshold
+                self.streaming_threshold = adjusted_threshold
+                self._threshold_already_adjusted = True
+            # Rule 2: Large total size (>40 GB) needs streaming even with smaller records
+            elif total_size_gb > 40:
+                # Scale threshold based on size: 40-100GB -> 30K, >100GB -> 20K, >200GB -> 10K
+                if total_size_gb > 200:
+                    adjusted_threshold = min(self.streaming_threshold, 10000)
+                elif total_size_gb > 100:
+                    adjusted_threshold = min(self.streaming_threshold, 20000)
+                else:  # 40-100 GB
+                    adjusted_threshold = min(self.streaming_threshold, 30000)
+
+                logging.info(f"Large total dataset ({total_size_gb:.1f} GB), adjusting streaming threshold from {self.streaming_threshold} to {adjusted_threshold}")
+                self._original_streaming_threshold = self.streaming_threshold
+                self.streaming_threshold = adjusted_threshold
+                self._threshold_already_adjusted = True
 
         # OPTIMIZED: Better threshold and processing choice
         # Use 30K as threshold for simple processing (balanced approach)
