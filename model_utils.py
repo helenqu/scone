@@ -28,12 +28,49 @@ import scone_utils as util
 # =====================================================
 
 class SconeClassifier():
-    # define my own reshape layer
+    """
+    Main classifier for SCONE (Supernova Classification with Neural Networks).
+
+    Implements a CNN-based approach for classifying supernovae from photometric
+    heatmap data. Supports both training and prediction modes with intelligent
+    memory optimization for large datasets.
+    """
+
     class Reshape(layers.Layer):
+        """
+        Custom Keras layer for dimension reordering of heatmap tensors.
+
+        Transforms tensor dimensions from TensorFlow's standard format to a
+        specific ordering required by the SCONE CNN architecture.
+
+        Transformation:
+            Input:  [batch, height, width, channels]  (TensorFlow standard)
+            Output: [batch, channels, width, height]   (SCONE architecture)
+
+        This reordering swaps height/width and moves channels from last to second position,
+        which may be optimized for the specific convolutional operations in SCONE's architecture.
+        """
         def call(self, inputs):
+            """
+            Apply the dimension reordering transformation.
+
+            Args:
+                inputs: Input tensor of shape [batch, height, width, channels]
+
+            Returns:
+                Transposed tensor of shape [batch, channels, width, height]
+            """
             return tf.transpose(inputs, perm=[0,3,2,1])
 
-        def get_config(self): # for model saving/loading
+        def get_config(self):
+            """
+            Get layer configuration for model serialization.
+
+            Required by Keras for saving and loading models containing custom layers.
+
+            Returns:
+                dict: Empty config dict (layer has no trainable parameters)
+            """
             return {}
 
     def __init__(self, config):
@@ -93,7 +130,13 @@ class SconeClassifier():
         self.streaming_threshold = config.get('streaming_threshold', 75000)  # Balanced threshold
         self.gc_frequency = config.get('gc_frequency', 200)  # Moderate GC frequency
         self.enable_dynamic_batch_size = config.get('enable_dynamic_batch_size', False)  # Keep disabled
-        self.enable_micro_batching = config.get('enable_micro_batching', False)  # Disabled by default
+
+        # Track if user explicitly set these values (for auto-configuration)  # 30th Oct, 2025, A. Mitra - Smart defaults
+        self._user_set_micro_batching = 'enable_micro_batching' in config  # 30th Oct, 2025, A. Mitra
+        self._user_set_micro_batch_size = 'micro_batch_size' in config  # 30th Oct, 2025, A. Mitra
+        self._user_set_chunk_size = 'chunk_size' in config  # 30th Oct, 2025, A. Mitra
+
+        self.enable_micro_batching = config.get('enable_micro_batching', False)  # Disabled by default, auto-enabled for large datasets
         self.micro_batch_size = config.get('micro_batch_size', 64)  # Larger micro-batches for balance
         self.enable_balanced_mode = config.get('enable_balanced_mode', True)  # DEFAULT: balanced memory/speed mode
         self.balanced_batch_size = config.get('balanced_batch_size', 128)  # Optimal batch size for balance
@@ -143,36 +186,154 @@ class SconeClassifier():
     
     def _setup_debug_modes(self):  # 3rd Sept, 2025, A. Mitra - New method to centralize debug flag configuration for easy maintenance
         """Setup debug modes based on debug_flag value.
-        
+
         Debug flag meanings:
-        0    = Production mode (default) - uses legacy retrieve_data  # 3rd Sept, 2025, A. Mitra - Changed default to use legacy implementation for stability
-        1    = Verbose logging
-        901  = Use refactored retrieve_data with basic logging  # 3rd Sept, 2025, A. Mitra - Refactored implementation with enhanced monitoring
-        902  = Use refactored retrieve_data with verbose logging  # 3rd Sept, 2025, A. Mitra - Refactored with detailed progress tracking
+        0    = Production mode (default) - uses refactored retrieve_data  # 30th Oct, 2025, A. Mitra - Changed default to use refactored implementation
+        -901 = Use legacy retrieve_data  # 30th Oct, 2025, A. Mitra - Legacy implementation for fallback/comparison
+
+        Note: Use --verbose or -v command-line flag to enable verbose logging with any implementation  # 30th Oct, 2025, A. Mitra - Separate verbose control
         1000+ = Reserved for future debug modes
         """
-        
-        # Define debug mode constants for clarity
+
+        # Define debug mode constants for clarity  # 30th Oct, 2025, A. Mitra - Simplified to only implementation choice
         self.DEBUG_MODES = {
-            'PRODUCTION': 0,
-            'VERBOSE': 1,
-            'REFAC_RETRIEVE': 901,
-            'REFAC_RETRIEVE_VERBOSE': 902,
+            'PRODUCTION': 0,  # Uses refactored (default)
+            'LEGACY_RETRIEVE': -901,  # 30th Oct, 2025, A. Mitra - Uses legacy for fallback/comparison
         }
+        # Note: verbose_data_loading is now controlled via --verbose command-line flag  # 30th Oct, 2025, A. Mitra
         
-        # Apply debug settings
+        # Apply debug settings  # 30th Oct, 2025, A. Mitra - Simplified to only log implementation choice
         if self.debug_flag == self.DEBUG_MODES['PRODUCTION']:
-            logging.info("Debug Mode: Production mode - using LEGACY retrieve_data")  # 3rd Sept, 2025, A. Mitra - Default now uses legacy for stability
-        elif self.debug_flag == self.DEBUG_MODES['VERBOSE']:
-            self.verbose_data_loading = True
-            logging.info("Debug Mode: Verbose logging enabled")
-        elif self.debug_flag == self.DEBUG_MODES['REFAC_RETRIEVE']:
-            logging.info("Debug Mode: Using REFACTORED retrieve_data")
-        elif self.debug_flag == self.DEBUG_MODES['REFAC_RETRIEVE_VERBOSE']:
-            self.verbose_data_loading = True
-            logging.info("Debug Mode: Using REFACTORED retrieve_data with verbose logging")
-        elif self.debug_flag > 0:
-            logging.info(f"Debug Mode: Custom debug flag {self.debug_flag}")
+            logging.info("Debug Mode: Production mode - using REFACTORED retrieve_data")  # 30th Oct, 2025, A. Mitra - Default now uses refactored for stability
+        elif self.debug_flag == self.DEBUG_MODES['LEGACY_RETRIEVE']:
+            logging.info("Debug Mode: Using LEGACY retrieve_data")  # 30th Oct, 2025, A. Mitra - Legacy for comparison
+        else:
+            logging.warning(f"Debug Mode: Unknown debug flag {self.debug_flag}, defaulting to PRODUCTION mode")  # 30th Oct, 2025, A. Mitra
+
+        # Verbose logging status (controlled separately via --verbose flag)  # 30th Oct, 2025, A. Mitra
+        if self.verbose_data_loading:
+            logging.info(f"Verbose logging: ENABLED")  # 30th Oct, 2025, A. Mitra
+
+    def _adjust_streaming_threshold_for_dataset(self, avg_mb_per_record, total_size_gb, save_original=False):  # 30th Oct, 2025, A. Mitra - Centralized threshold adjustment logic
+        """
+        Intelligently adjust streaming threshold based on dataset characteristics.
+
+        Args:
+            avg_mb_per_record: Average MB per record
+            total_size_gb: Total dataset size in GB
+            save_original: If True, saves original threshold before adjusting
+
+        Returns:
+            bool: True if threshold was adjusted, False otherwise
+        """
+        if not hasattr(self, '_threshold_already_adjusted') or not self._threshold_already_adjusted:
+            # Rule 1: Very large records (>10 MB each) need aggressive streaming
+            if avg_mb_per_record > 10:
+                adjusted_threshold = min(self.streaming_threshold, max(5000, int(50000 / avg_mb_per_record)))
+                if adjusted_threshold < self.streaming_threshold:
+                    logging.info(f"Large records detected ({avg_mb_per_record:.1f} MB/record), adjusting streaming threshold from {self.streaming_threshold} to {adjusted_threshold}")
+                    if save_original:
+                        self._original_streaming_threshold = self.streaming_threshold
+                    self.streaming_threshold = adjusted_threshold
+                    self._threshold_already_adjusted = True
+                    return True
+
+            # Rule 2: Large total size (>40 GB) needs streaming even with smaller records
+            elif total_size_gb > 40:
+                # Scale threshold based on size: 40-100GB -> 30K, >100GB -> 20K, >200GB -> 10K
+                if total_size_gb > 200:
+                    adjusted_threshold = min(self.streaming_threshold, 10000)
+                elif total_size_gb > 100:
+                    adjusted_threshold = min(self.streaming_threshold, 20000)
+                else:  # 40-100 GB
+                    adjusted_threshold = min(self.streaming_threshold, 30000)
+
+                if adjusted_threshold < self.streaming_threshold:
+                    logging.info(f"Large total dataset ({total_size_gb:.1f} GB), adjusting streaming threshold from {self.streaming_threshold} to {adjusted_threshold}")
+                    if save_original:
+                        self._original_streaming_threshold = self.streaming_threshold
+                    self.streaming_threshold = adjusted_threshold
+                    self._threshold_already_adjusted = True
+                    return True
+
+        return False
+
+    def _estimate_dataset_size(self, dataset, verbose_logging=False):  # 30th Oct, 2025, A. Mitra - Centralized dataset size estimation
+        """
+        Estimate dataset size with caching and fallback strategies.
+        Used by prediction methods (not data loading).
+
+        Args:
+            dataset: TensorFlow dataset
+            verbose_logging: If True, provides detailed logging
+
+        Returns:
+            int: Estimated dataset size
+        """
+        # Check if we have cached size first
+        if hasattr(self, '_dataset_size') and self._dataset_size is not None:
+            if verbose_logging:
+                logging.info(f"Using known dataset size: {self._dataset_size}")
+            return self._dataset_size
+
+        # Estimate dataset size
+        try:
+            dataset_size = tf.data.experimental.cardinality(dataset).numpy()
+            if dataset_size == tf.data.experimental.UNKNOWN_CARDINALITY:
+                # For unknown cardinality, take a small sample to estimate
+                sample_size = min(1000, self.streaming_threshold // 10)
+                sample_count = dataset.take(sample_size).reduce(0, lambda x, _: x + 1).numpy()
+
+                if sample_count == sample_size:
+                    if verbose_logging:
+                        logging.info(f"Dataset size > {sample_size}, estimating as large dataset")
+                    dataset_size = self.streaming_threshold + 1  # Force streaming for large datasets
+                else:
+                    dataset_size = sample_count  # Small dataset, exact count
+
+            return dataset_size
+
+        except Exception as e:
+            if verbose_logging:
+                logging.warning(f"Could not estimate dataset size: {e}, using streaming prediction")
+            else:
+                # Simple exception handling for non-verbose mode
+                pass
+            return self.streaming_threshold + 1  # Default to streaming on error
+
+    def _auto_configure_for_large_dataset(self, dataset_size, total_size_gb=None):  # 30th Oct, 2025, A. Mitra - Smart auto-configuration
+        """
+        Automatically configure memory optimization settings for large datasets.
+        Only applies if user hasn't explicitly set these values in config.
+
+        Uses fixed, tested values for simplicity: micro_batch_size=16, chunk_size=400
+
+        Args:
+            dataset_size: Number of samples in dataset
+            total_size_gb: Total dataset size in GB (optional)
+        """
+        # Determine if this is a large dataset that needs optimization  # 30th Oct, 2025, A. Mitra
+        is_large_dataset = (dataset_size >= self.streaming_threshold or
+                           self.force_streaming or
+                           (total_size_gb is not None and total_size_gb > 40))
+
+        if not is_large_dataset:
+            return  # No auto-configuration needed for small datasets
+
+        # Auto-enable micro-batching if not explicitly set by user  # 30th Oct, 2025, A. Mitra
+        if not self._user_set_micro_batching:
+            self.enable_micro_batching = True
+            logging.info(f"Auto-enabled micro-batching for large dataset (size: {dataset_size})")  # 30th Oct, 2025, A. Mitra
+
+        # Auto-configure micro_batch_size to fixed optimal value if not set by user  # 30th Oct, 2025, A. Mitra
+        if not self._user_set_micro_batch_size:
+            self.micro_batch_size = 16  # Fixed optimal value for streaming
+            logging.info(f"Auto-set micro_batch_size=16 for large dataset")  # 30th Oct, 2025, A. Mitra
+
+        # Auto-configure chunk_size to fixed optimal value if not set by user  # 30th Oct, 2025, A. Mitra
+        if not self._user_set_chunk_size:
+            self.chunk_size = 400  # Fixed optimal value for streaming
+            logging.info(f"Auto-set chunk_size=400 for large dataset")  # 30th Oct, 2025, A. Mitra
 
     def write_summary_file(self, history):
 
@@ -292,6 +453,19 @@ class SconeClassifier():
             json.dump(history, outfile)
 
     def run(self):
+        """
+        Main execution method for SCONE classifier.
+
+        Orchestrates the complete workflow based on mode (train or predict):
+        - MODE_TRAIN: Loads data, trains model, evaluates on test set
+        - MODE_PREDICT: Loads trained model, runs predictions on dataset
+
+        Handles:
+        - Dry run mode for memory baseline testing
+        - External model loading
+        - Memory monitoring and optimization
+        - Debug pause points for analysis
+        """
         tf.random.set_seed(self.seed)
 
         self.t_start = time.time()
@@ -327,19 +501,16 @@ class SconeClassifier():
 
             
             debug_flag = self.debug_flag
-            DEBUG_MODE_LIST = [self.DEBUG_MODES['REFAC_RETRIEVE'], 
-                               self.DEBUG_MODES['REFAC_RETRIEVE_VERBOSE'] ]
 
-            legacy_predict = debug_flag is None or debug_flag == self.DEBUG_MODES['PRODUCTION'] 
-
-            # Choose retrieve_data implementation based on debug flag
+            # Choose retrieve_data implementation based on debug flag  # 30th Oct, 2025, A. Mitra - Simplified logic
+            legacy_predict = debug_flag == self.DEBUG_MODES['LEGACY_RETRIEVE']  # 30th Oct, 2025, A. Mitra - Only one legacy flag now
 
             if legacy_predict:
-                # Default (0) uses legacy implementation
+                # Flag -901 uses legacy implementation
                 logging.info("Using LEGACY retrieve_data implementation")
                 dataset, size = self._retrieve_data_legacy(raw_dataset)
-            elif debug_flag in DEBUG_MODE_LIST:
-                # Flags 901 and 902 use refactored implementation
+            elif debug_flag == self.DEBUG_MODES['PRODUCTION'] or debug_flag is None:
+                # Default (0) uses refactored implementation  # 30th Oct, 2025, A. Mitra - Refactored is now default
                 dataset, size = self._retrieve_data(raw_dataset)  # refactored Sep 2025, A.Mitra
             else:
                 sys.exit(f"n ABORT with undefined debug_flag = {debug_flag}")
@@ -416,6 +587,22 @@ class SconeClassifier():
         return model, history
 
     def log_memory_usage(self, step_name):  # 3rd Sept, 2025, A. Mitra - New method for real-time memory monitoring throughout processing
+        """
+        Log current memory usage at a specific execution step.
+
+        Tracks both process-specific memory (RSS - Resident Set Size) and
+        system-wide memory statistics. Used throughout the codebase to monitor
+        memory consumption patterns and identify potential memory issues.
+
+        Args:
+            step_name (str): Description of the current execution step for logging context
+                           (e.g., "After model loading", "During prediction batch 100")
+
+        Note:
+            - Only logs if self.process is initialized (controlled by memory_optimize config)
+            - Memory values reported in GB for readability
+            - Includes system memory percentage and available memory
+        """
         if not self.process:  # Skip if process monitoring not initialized
             return
         memory_info = self.process.memory_info()
@@ -507,47 +694,18 @@ class SconeClassifier():
         Only applies to large datasets; small datasets use fast legacy method.
         """
         # First check dataset size - use fast method for small datasets
-        if hasattr(self, '_dataset_size') and self._dataset_size is not None:
-            dataset_size = self._dataset_size
-        else:
-            # Estimate dataset size
-            try:
-                dataset_size = tf.data.experimental.cardinality(dataset).numpy()
-                if dataset_size == tf.data.experimental.UNKNOWN_CARDINALITY:
-                    sample_size = min(1000, self.streaming_threshold // 10)
-                    sample_count = dataset.take(sample_size).reduce(0, lambda x, _: x + 1).numpy()
-                    dataset_size = self.streaming_threshold + 1 if sample_count == sample_size else sample_count
-            except:
-                dataset_size = self.streaming_threshold + 1  # Assume large on error
+        dataset_size = self._estimate_dataset_size(dataset, verbose_logging=False)  # 30th Oct, 2025, A. Mitra - Use centralized estimation
 
         # INTELLIGENT FIX: Also apply size-based threshold adjustment here if not already done
         # This handles the case where _retrieve_data didn't adjust (e.g., small records but many of them)
-        if hasattr(self, '_total_size_mb') and not hasattr(self, '_threshold_already_adjusted'):
+        if hasattr(self, '_total_size_mb'):
             avg_mb_per_record = self._total_size_mb / dataset_size if dataset_size > 0 else 0
             total_size_gb = self._total_size_mb / 1024
+            self._adjust_streaming_threshold_for_dataset(avg_mb_per_record, total_size_gb, save_original=False)  # 30th Oct, 2025, A. Mitra - Use centralized adjustment
 
-            # Apply same intelligent logic as in _retrieve_data
-            # Rule 1: Very large records (>10 MB each) need aggressive streaming
-            if avg_mb_per_record > 10:
-                adjusted_threshold = min(self.streaming_threshold, max(5000, int(50000 / avg_mb_per_record)))
-                if adjusted_threshold < self.streaming_threshold:
-                    logging.info(f"Large records detected ({avg_mb_per_record:.1f} MB/record), adjusting streaming threshold from {self.streaming_threshold} to {adjusted_threshold}")
-                    self.streaming_threshold = adjusted_threshold
-                    self._threshold_already_adjusted = True
-            # Rule 2: Large total size (>40 GB) needs streaming even with smaller records
-            elif total_size_gb > 40:
-                # Scale threshold based on size: 40-100GB -> 30K, >100GB -> 20K, >200GB -> 10K
-                if total_size_gb > 200:
-                    adjusted_threshold = min(self.streaming_threshold, 10000)
-                elif total_size_gb > 100:
-                    adjusted_threshold = min(self.streaming_threshold, 20000)
-                else:  # 40-100 GB
-                    adjusted_threshold = min(self.streaming_threshold, 30000)
-
-                if adjusted_threshold < self.streaming_threshold:
-                    logging.info(f"Large total dataset ({total_size_gb:.1f} GB), adjusting streaming threshold from {self.streaming_threshold} to {adjusted_threshold}")
-                    self.streaming_threshold = adjusted_threshold
-                    self._threshold_already_adjusted = True
+        # Auto-configure memory settings for large datasets if needed  # 30th Oct, 2025, A. Mitra - Smart defaults
+        total_size_gb_for_config = self._total_size_mb / 1024 if hasattr(self, '_total_size_mb') else None
+        self._auto_configure_for_large_dataset(dataset_size, total_size_gb_for_config)  # 30th Oct, 2025, A. Mitra
 
         # For small datasets, use fast legacy method even in balanced mode
         if dataset_size < self.streaming_threshold:
@@ -917,25 +1075,11 @@ class SconeClassifier():
             return self._predict_original(dataset)
 
         # Use stored dataset size if available (from retrieve_data)
-        if hasattr(self, '_dataset_size') and self._dataset_size is not None:
-            dataset_size = self._dataset_size
-            logging.info(f"Using known dataset size: {dataset_size}")
-        else:
-            # Estimate dataset size efficiently
-            try:
-                dataset_size = tf.data.experimental.cardinality(dataset).numpy()
-                if dataset_size == tf.data.experimental.UNKNOWN_CARDINALITY:
-                    # For unknown cardinality, take a small sample to estimate
-                    sample_size = min(1000, self.streaming_threshold // 10)
-                    sample_count = dataset.take(sample_size).reduce(0, lambda x, _: x + 1).numpy()
-                    if sample_count == sample_size:
-                        logging.info(f"Dataset size > {sample_size}, estimating as large dataset")
-                        dataset_size = self.streaming_threshold + 1  # Force streaming for large datasets
-                    else:
-                        dataset_size = sample_count  # Small dataset, exact count
-            except Exception as e:
-                logging.warning(f"Could not estimate dataset size: {e}, using streaming prediction")
-                dataset_size = self.streaming_threshold + 1  # Default to streaming on error
+        dataset_size = self._estimate_dataset_size(dataset, verbose_logging=True)  # 30th Oct, 2025, A. Mitra - Use centralized estimation with verbose logging
+
+        # Auto-configure memory settings for large datasets if needed  # 30th Oct, 2025, A. Mitra - Smart defaults
+        total_size_gb_for_config = self._total_size_mb / 1024 if hasattr(self, '_total_size_mb') else None
+        self._auto_configure_for_large_dataset(dataset_size, total_size_gb_for_config)  # 30th Oct, 2025, A. Mitra
 
         # For small datasets, ALWAYS use fast legacy method regardless of memory settings
         if dataset_size < self.streaming_threshold and not self.force_streaming:
@@ -1757,27 +1901,7 @@ class SconeClassifier():
             total_size_gb = self._total_size_mb / 1024
 
             # Strategy: Use total dataset size to determine appropriate threshold
-            # Rule 1: Very large records (>10 MB each) need aggressive streaming
-            if avg_mb_per_record > 10:
-                adjusted_threshold = min(self.streaming_threshold, max(5000, int(50000 / avg_mb_per_record)))
-                logging.info(f"Large records detected ({avg_mb_per_record:.1f} MB/record), adjusting streaming threshold from {self.streaming_threshold} to {adjusted_threshold}")
-                self._original_streaming_threshold = self.streaming_threshold
-                self.streaming_threshold = adjusted_threshold
-                self._threshold_already_adjusted = True
-            # Rule 2: Large total size (>40 GB) needs streaming even with smaller records
-            elif total_size_gb > 40:
-                # Scale threshold based on size: 40-100GB -> 30K, >100GB -> 20K, >200GB -> 10K
-                if total_size_gb > 200:
-                    adjusted_threshold = min(self.streaming_threshold, 10000)
-                elif total_size_gb > 100:
-                    adjusted_threshold = min(self.streaming_threshold, 20000)
-                else:  # 40-100 GB
-                    adjusted_threshold = min(self.streaming_threshold, 30000)
-
-                logging.info(f"Large total dataset ({total_size_gb:.1f} GB), adjusting streaming threshold from {self.streaming_threshold} to {adjusted_threshold}")
-                self._original_streaming_threshold = self.streaming_threshold
-                self.streaming_threshold = adjusted_threshold
-                self._threshold_already_adjusted = True
+            self._adjust_streaming_threshold_for_dataset(avg_mb_per_record, total_size_gb, save_original=True)  # 30th Oct, 2025, A. Mitra - Use centralized adjustment
 
         # OPTIMIZED: Better threshold and processing choice
         # Use 30K as threshold for simple processing (balanced approach)
@@ -1870,14 +1994,14 @@ class SconeClassifier():
     def _split_and_retrieve_data(self):
         raw_dataset = self._load_dataset()
         
-        # Choose retrieve_data implementation based on debug flag
-        if hasattr(self, 'DEBUG_MODES') and self.debug_flag in [self.DEBUG_MODES['REFAC_RETRIEVE'], self.DEBUG_MODES['REFAC_RETRIEVE_VERBOSE']]:
-            logging.info("Using REFACTORED retrieve_data implementation for training")  # 3rd Sept, 2025, A. Mitra - Enhanced implementation for testing
-            dataset, size = self._retrieve_data(raw_dataset)
-        else:
-            # Default (0) and any other flag uses legacy  # 3rd Sept, 2025, A. Mitra - Changed default to legacy for stability
-            logging.info("Using LEGACY retrieve_data implementation for training")
+        # Choose retrieve_data implementation based on debug flag  # 30th Oct, 2025, A. Mitra - Simplified logic
+        if hasattr(self, 'DEBUG_MODES') and self.debug_flag == self.DEBUG_MODES['LEGACY_RETRIEVE']:
+            logging.info("Using LEGACY retrieve_data implementation for training")  # 30th Oct, 2025, A. Mitra - Legacy for comparison
             dataset, size = self._retrieve_data_legacy(raw_dataset)
+        else:
+            # Default (0) and other flags use refactored  # 30th Oct, 2025, A. Mitra - Changed default to refactored for stability
+            logging.info("Using REFACTORED retrieve_data implementation for training")  # 30th Oct, 2025, A. Mitra - Enhanced implementation is now default
+            dataset, size = self._retrieve_data(raw_dataset)
         
         dataset = dataset.shuffle(size)
 
@@ -1940,13 +2064,48 @@ class SconeClassifier():
 
 
 class SconeClassifierIaModels(SconeClassifier):
-    # define my own reshape layer
-    # Apr 16 2024:  obsolete ??
+    """
+    Specialized SCONE classifier for Type Ia supernova classification.
+
+    Extends SconeClassifier with specific adaptations for binary Ia vs non-Ia
+    classification tasks. May include specialized architectures or preprocessing
+    optimized for Type Ia identification.
+
+    Note: Apr 16 2024 - Some components may be obsolete, kept for backward compatibility.
+    """
+
     class Reshape(layers.Layer):
+        """
+        Custom Keras layer for dimension reordering of heatmap tensors.
+
+        Identical to SconeClassifier.Reshape - transforms tensor dimensions from
+        TensorFlow's standard format to SCONE CNN architecture format.
+
+        Transformation:
+            Input:  [batch, height, width, channels]  (TensorFlow standard)
+            Output: [batch, channels, width, height]   (SCONE architecture)
+
+        Note: Apr 16 2024 - May be obsolete, evaluation pending.
+        """
         def call(self, inputs):
+            """
+            Apply the dimension reordering transformation.
+
+            Args:
+                inputs: Input tensor of shape [batch, height, width, channels]
+
+            Returns:
+                Transposed tensor of shape [batch, channels, width, height]
+            """
             return tf.transpose(inputs, perm=[0,3,2,1])
 
-        def get_config(self): # for model saving/loading
+        def get_config(self):
+            """
+            Get layer configuration for model serialization.
+
+            Returns:
+                dict: Empty config dict (layer has no trainable parameters)
+            """
             return {}
 
     def __init__(self, config):
@@ -2020,12 +2179,13 @@ def get_args():
     parser = argparse.ArgumentParser(  # 3rd Sept, 2025, A. Mitra - Enhanced argument parser with detailed help
         description='SCONE (Supernova Classification with Neural Networks) - Train or predict using heatmap data',  # 3rd Sept, 2025, A. Mitra - Descriptive tool description
         formatter_class=argparse.RawDescriptionHelpFormatter,  # 3rd Sept, 2025, A. Mitra - Preserve formatting in help text
-        epilog="""  # 3rd Sept, 2025, A. Mitra - Detailed help section with examples
+        epilog="""  # 30th Oct, 2025, A. Mitra - Updated help section with simplified flags
 Debug flag values:
-  0    Production mode (default) - uses legacy retrieve_data  # 3rd Sept, 2025, A. Mitra - Stable default
-  1    Verbose logging
-  901  Use refactored retrieve_data  # 3rd Sept, 2025, A. Mitra - Enhanced implementation with monitoring
-  902  Use refactored retrieve_data with verbose logging  # 3rd Sept, 2025, A. Mitra - Detailed progress tracking
+  0     Production mode (default) - uses refactored retrieve_data  # 30th Oct, 2025, A. Mitra - Stable default
+  -901  Use legacy retrieve_data  # 30th Oct, 2025, A. Mitra - Legacy implementation for fallback/comparison
+
+Verbose logging:
+  Use --verbose or -v flag to enable detailed progress tracking with any implementation
 
 Memory optimization examples:  # 8th Sept, 2025, A. Mitra - Added streaming examples
   %(prog)s --config_path config.yaml --force_streaming           # Always use streaming (memory-efficient)
@@ -2033,10 +2193,12 @@ Memory optimization examples:  # 8th Sept, 2025, A. Mitra - Added streaming exam
   %(prog)s --config_path config.yaml --streaming_threshold 5000 # Custom threshold for auto-streaming
 
 Examples:
-  %(prog)s --config_path config.yaml
-  %(prog)s --config_path config.yaml --debug_flag 902
+  %(prog)s --config_path config.yaml                              # Run with default settings (refactored, quiet)
+  %(prog)s --config_path config.yaml --verbose                    # Run with verbose logging
+  %(prog)s --config_path config.yaml --debug_flag -901            # Run with legacy implementation
+  %(prog)s --config_path config.yaml --debug_flag -901 --verbose  # Run legacy with verbose logging
   %(prog)s --config_path config.yaml --heatmaps_subdir custom_heatmaps
-  %(prog)s --config_path config.yaml --force_streaming --debug_flag 902
+  %(prog)s --config_path config.yaml --force_streaming --verbose
         """
     )
 
@@ -2051,10 +2213,14 @@ Examples:
                        help=f'Alternative heatmaps subdirectory name (default: {HEATMAPS_SUBDIR_DEFAULT})')  # 3rd Sept, 2025, A. Mitra - Show default value
 
     parser.add_argument('--debug_flag',   # 3rd Sept, 2025, A. Mitra - New debug flag argument for development
-                       type=int, 
+                       type=int,
                        default=None,  # 3rd Sept, 2025, A. Mitra - None allows config file to take precedence
                        metavar='N',  # 3rd Sept, 2025, A. Mitra - Clear placeholder in help
-                       help='Debug flag for development/testing (0=production, 1=verbose, 900-902=implementation testing). Overrides config file.')  # 3rd Sept, 2025, A. Mitra - Comprehensive help message
+                       help='Debug flag for implementation testing (0=refactored/production [default], -901=legacy). Overrides config file.')  # 30th Oct, 2025, A. Mitra - Updated for simplified flags
+
+    parser.add_argument('--verbose', '-v',   # 30th Oct, 2025, A. Mitra - New verbose flag for detailed logging
+                       action='store_true',  # 30th Oct, 2025, A. Mitra - Boolean flag
+                       help='Enable verbose logging with detailed progress tracking (works with any debug_flag)')  # 30th Oct, 2025, A. Mitra - Clear description
 
     parser.add_argument('--force_streaming',   # 8th Sept, 2025, A. Mitra - Memory optimization control
                        action='store_true',  # 8th Sept, 2025, A. Mitra - Boolean flag
@@ -2113,6 +2279,13 @@ if __name__ == "__main__":
         scone_config['debug_flag'] = 0  # Default value  # 3rd Sept, 2025, A. Mitra - Production mode as default
     else:
         logging.info(f"Debug flag from config: {scone_config['debug_flag']}")  # 3rd Sept, 2025, A. Mitra - Show config file value being used
+
+    # Handle verbose flag: command-line overrides config file  # 30th Oct, 2025, A. Mitra - Separate verbose control
+    if args.verbose:
+        scone_config['verbose_data_loading'] = True  # 30th Oct, 2025, A. Mitra - Enable verbose logging
+        logging.info("Verbose logging enabled from command line")  # 30th Oct, 2025, A. Mitra - Inform user
+    elif 'verbose_data_loading' not in scone_config:
+        scone_config['verbose_data_loading'] = False  # 30th Oct, 2025, A. Mitra - Default to quiet mode
 
     # Handle streaming options: command-line overrides config file  # 8th Sept, 2025, A. Mitra - Implement streaming control overrides
     if args.force_streaming:

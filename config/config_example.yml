@@ -51,18 +51,30 @@ val_proportion: 0.1
 has_ids: True
 with_z: False # classification with/without redshift
 
+### DEBUG AND LOGGING SETTINGS ###  # 30th Oct, 2025, A. Mitra - Debug flag and verbose logging controls
+debug_flag: 0                      # Implementation selection: 0=refactored (default), -901=legacy (default: 0)
+verbose_data_loading: False        # Enable detailed progress reporting (default: False). Can also use --verbose or -v CLI flag
+
 ### MEMORY OPTIMIZATION SETTINGS ###  # 8th Sept, 2025, A. Mitra - Comprehensive memory optimization section
 # Basic memory optimization
 memory_optimize: True              # Enable memory optimization features (default: True)
 force_streaming: False             # Force streaming prediction regardless of size (default: False)
-streaming_threshold: 10000         # Auto-streaming for datasets larger than this (default: 10000)
+streaming_threshold: 75000         # Auto-streaming for datasets larger than this (default: 75000)
+                                   # Note: This threshold adapts automatically based on dataset characteristics:
+                                   #   - Large records (>10 MB each): threshold reduces to 5000-50000
+                                   #   - Total size >200 GB: threshold reduces to 10000
+                                   #   - Total size >100 GB: threshold reduces to 20000
+                                   #   - Total size >40 GB: threshold reduces to 30000
 gc_frequency: 50                   # Garbage collection frequency in batches (default: 50)
-verbose_data_loading: False        # Enable detailed progress reporting (default: False)
 
-# Advanced memory optimization (NEW) 
+# Advanced memory optimization (NEW)
+# NOTE: These settings are AUTO-CONFIGURED for large datasets (≥75K samples or >40GB)  # 30th Oct, 2025, A. Mitra
+# When auto-configured, uses: enable_micro_batching=true, micro_batch_size=16, chunk_size=400
+# Only set explicitly if you want to override the automatic behavior
 enable_dynamic_batch_size: True    # Enable adaptive batch sizing based on memory pressure (default: True)
-enable_micro_batching: True        # Enable micro-batching for extreme memory efficiency (default: True)
-micro_batch_size: 4                # Size of micro-batches within main batches (default: 4)
+enable_micro_batching: False       # Auto-enabled for large datasets (default: False, auto-set to true when needed)
+micro_batch_size: 64               # Auto-set to 16 for large datasets (default: 64, auto-adjusted to 16 when needed)
+chunk_size: 1000                   # Auto-set to 400 for large datasets (default: 1000, auto-adjusted to 400 when needed)
 
 # Model optimization for inference
 enable_model_quantization: False   # Enable model quantization for reduced memory usage (default: False)
