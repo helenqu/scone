@@ -302,7 +302,7 @@ def write_final_summary_file(args, config):
         s.write(f"N_HEATMAP_SUMMARY:  {n_summ_found}    # expect {n_summ_expect} \n")
 
         cpu_sum_hr = cpu_sum_minutes/60.0                            
-        s.write(f"CPU_SUM:        {cpu_sum_hr:.2f}   # hr \n")
+        s.write(f"CPU_SUM:        {cpu_sum_hr:.3f}   # hr \n")
 
         if LEGACY :
             sim_frac = config['sim_fraction']
