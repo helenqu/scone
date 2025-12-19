@@ -1814,7 +1814,9 @@ class SconeClassifier():
         else:
             filenames = ["{}/{}".format(self.heatmaps_paths, f.name) for f in os.scandir(self.heatmaps_paths) if "tfrecord" in f.name]
 
+        np.random.seed(self.seed)  # Dec 19 2025 RK - ensure reproducible file shuffle
         np.random.shuffle(filenames)
+
         self._num_files = len(filenames)  # Store for size estimation
         logging.info(f"Found {self._num_files} heatmap files")
         logging.info(f"First random heatmap file: {filenames[0]}")
