@@ -14,6 +14,9 @@
 #    skip invalid snid_select_files to avoid false duplicates.
 #    See new method use_select_file(...)
 # Aug 29 2025 RK - fix rubble from Aug 26; always use a SIMGEN-DUMP file
+#
+# Dec 20 2025 RK - abort immediately of no "trained_model" is given for predict mode.
+#
 
 import os, sys, yaml, shutil, gzip
 import argparse, subprocess
@@ -375,10 +378,18 @@ def write_sbatch_for_scone(ARGS, config):
     IS_MODEL_TRAIN   = (mode == MODE_TRAIN)
     IS_MODEL_PREDICT = (mode == MODE_PREDICT)
 
+    # Dec 20 2025 RK - abort immediately if trained_model isn't provided for predict mode
+    if IS_MODEL_PREDICT and CONFIG_KEY_TRAINED_MODEL not in config:
+        msgerr = \
+                 f' ERROR: missing required "{CONFIG_KEY_TRAINED_MODEL}:" config key ' \
+                 f'for {mode} mode in \n' \
+                 f'\t {ARGS.config_path}'
+        assert False,  msgerr 
+
     output_path       = config['output_path']
 
     # few 'train' items are the same for train and predict
-    init_env          = config.setdefault('init_env_train',"")  
+    init_env         = config.setdefault('init_env_train',"")  
     sbatch_template  = os.path.expandvars(config['sbatch_template_train'])
 
     sbatch_file      = output_path + '/' + SBATCH_SCONE_FILE
