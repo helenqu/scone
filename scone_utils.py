@@ -17,6 +17,7 @@ PROGRAM_CLASS_PREDICT     = "scone_predict"
  
 MODE_TRAIN   = "train"
 MODE_PREDICT = "predict"
+CONFIG_KEY_TRAINED_MODEL =  "trained_model"  # Dec 20 2025, RK
 
 SIMTAG_Ia    = "Ia"      # from GENTYPE_TO_NAME dict in sim readme
 SIMTAG_nonIa = "nonIa"   # and used for internal dictionaries
