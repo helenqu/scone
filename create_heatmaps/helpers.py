@@ -77,53 +77,68 @@ def get_band_to_wave(survey):
     return band_to_wave
 
 
-def read_fits(fname, sn_type_id_to_name, survey_from_config, drop_separators=False):
+def read_fits(fname_phot, sn_type_id_to_name, survey_from_config, drop_separators=False):
     """Load SNANA formatted data and cast it to a PANDAS dataframe
 
     Args:
-        fname (str): path + name to PHOT.FITS file
+        fname_phot (str): path + name to PHOT.FITS file
         drop_separators (Boolean): if -777 are to be dropped
 
     Returns:
         (astropy.table.Table) dataframe from PHOT.FITS file (with ID)
         (pandas.DataFrame) dataframe from HEAD.FITS file
+
+    Jan 14 2026 RK - fix to work properly for empty PHOT file
+
     """
 
+    fname_head = fname_phot.replace("PHOT.FITS", "HEAD.FITS")  
+
     # load photometry
-    lcdata = Table.read(fname, format='fits')
+    lcdata = Table.read(fname_phot, format='fits')
+    n_lcdata = len(lcdata) 
 
     if len(lcdata) == 0:
-        print(f"{fname} empty!!")
-        return lcdata, lcdata
-    # failsafe
-    if lcdata['MJD'][-1] == -777.0:
-        lcdata.remove_row(-1)
-    if lcdata['MJD'][0] == -777.0:
-        lcdata.remove_row(0)
+        logging.info(f"Beware {os.path.basename(fname_phot)} is empty !!")
+        # xxx mark delete Jan 14 2026:  return lcdata, lcdata 
+    else :
+        # failsafe
+        if lcdata['MJD'][-1] == -777.0:
+            lcdata.remove_row(-1)
+        if lcdata['MJD'][0] == -777.0:
+            lcdata.remove_row(0)
+
+    # count rows after removing pad values
+    n_lcdata = len(lcdata)  
 
     # load header
-    metadata_hdu = fits.open(fname.replace("PHOT.FITS", "HEAD.FITS"))
+    metadata_hdu = fits.open(fname_head)
     survey = survey_from_config if survey_from_config else metadata_hdu[0].header["SURVEY"]
 
-    header = Table.read(fname.replace("PHOT.FITS", "HEAD.FITS"), format="fits")
+    header = Table.read(fname_head, format="fits")
     df_header = header.to_pandas()
     df_header["SNID"] = df_header["SNID"].astype(np.int32)
 
+    
     # add SNID to phot for skimming
-    arr_ID = np.zeros(len(lcdata), dtype=np.int32)
-    # New light curves are identified by MJD == -777.0
-    arr_idx = np.where(lcdata["MJD"] == -777.0)[0]
-    arr_idx = np.hstack((np.array([0]), arr_idx, np.array([len(lcdata)])))
+    arr_ID = np.zeros(n_lcdata, dtype=np.int32)
     # Fill in arr_ID
-    for counter in range(1, len(arr_idx)):
-        start, end = arr_idx[counter - 1], arr_idx[counter]
-        # index starts at zero
-        arr_ID[start:end] = df_header.SNID.iloc[counter - 1]
+    if n_lcdata > 0:
+        # New light curves are identified by MJD == -777.0
+        arr_idx = np.where(lcdata["MJD"] == -777.0)[0]
+        arr_idx = np.hstack((np.array([0]), arr_idx, np.array([n_lcdata])))
+        for counter in range(1, len(arr_idx)):
+            start, end = arr_idx[counter - 1], arr_idx[counter]
+            # index starts at zero
+            arr_ID[start:end] = df_header.SNID.iloc[counter - 1]
+
+
     lcdata["SNID"] = arr_ID
 
-    if drop_separators:
+    if n_lcdata > 0 and drop_separators:
         lcdata = lcdata[lcdata['MJD'] != -777.000]
-
+            
+    # - - - -
     KEY_SIM_GENTYPE_LIST = [ 'SIM_GENTYPE', 'SIM_TYPE_INDEX' ]
     KEY_SIM_GENTYPE      = 'xxx'
     KEY_SNTYPE      = 'SNTYPE'   # always there for real data
@@ -162,7 +177,7 @@ def read_fits(fname, sn_type_id_to_name, survey_from_config, drop_separators=Fal
 
     # Nov 22 2024 RK - store last char only for filter since there was a
     # recent sim change to write out entire filter name; 
-    # e.g previous 'z' is now written as 'LSST-z'          .xyz
+    # e.g previous 'z' is now written as 'LSST-z'      
     lcdata['passband']  = [ s.strip()[-1:] for s in lcdata['passband']]  
     #sys.exit(f"\n xxx modified lcdata = \n{lcdata}")
 

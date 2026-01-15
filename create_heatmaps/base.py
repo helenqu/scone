@@ -79,23 +79,28 @@ class CreateHeatmapsBase(abc.ABC):
 
 
     def load_data(self):
-        logging.info(f'job {self.index}: process file {self.lcdata_path}')
+
+        # Jan 14 2026 RK - few fixes to work with empty phot file and not crash; see n_lcdata
+
+        logging.info(f'job {self.index:3d}: process file {self.lcdata_path}')
 
         if os.path.exists(self.finished_filenames_path):
             finished_filenames = pd.read_csv(self.finished_filenames_path)
             if os.path.basename(self.metadata_path) in finished_filenames:
                 logging.info(" file has already been processed, exiting")
                 sys.exit(0)
-
+                
         self.metadata, self.lcdata, survey = \
                 read_fits(self.lcdata_path, self.sn_type_id_to_name, self.survey)
 
+        n_lcdata = len(self.lcdata)
+
+        true_target  = None
         if self.IS_DATA_REAL:
             metadata_ids = self.metadata.object_id # take everything for real data
-            true_target  = None
         else:
             metadata_ids = self.metadata[self.metadata.true_target.isin(self.types)].object_id
-            true_target  = self.metadata.true_target.iloc[0]  # Aug 22 2025
+            if n_lcdata > 0 : true_target  = self.metadata.true_target.iloc[0] 
 
         self.lcdata.add_index('object_id')
         self.lcdata['passband'] = [flt.strip() for flt in self.lcdata['passband']]
@@ -108,7 +113,7 @@ class CreateHeatmapsBase(abc.ABC):
 
         ids_path = self.hdf5_select_file      # refactored, RK
 
-        if ids_path:
+        if ids_path and n_lcdata > 0 :
             logging.info(f"Open snid-select file:  {ids_path}")
             ids_file     = h5py.File(ids_path, "r")
             ids_name     = self.get_hdf5_ids_name()
@@ -121,11 +126,15 @@ class CreateHeatmapsBase(abc.ABC):
         else:
             self.ps_list = [ 1, 1]
         
-        self.has_ids = ids_path and self.ids is not None
-        self.ids_for_current_file = np.intersect1d(self.lcdata_ids, self.ids) \
-                                    if self.has_ids else self.lcdata_ids
+        if n_lcdata > 0:
+            self.has_ids = ids_path and self.ids is not None
+            self.ids_for_current_file = np.intersect1d(self.lcdata_ids, self.ids) \
+                                        if self.has_ids else self.lcdata_ids
+        else:
+            self.has_ids = []
+            self.ids_for_current_file = []
 
-        logging.info(f"job {self.index}: {'found' if self.has_ids else 'no'} idList, " \
+        logging.info(f"job {self.index:3d}: {'found' if self.has_ids else 'no'} idList, " \
                      f"expect {len(self.ids_for_current_file)}/{len(self.lcdata_ids)} heatmaps for this file")
 
         return
@@ -146,14 +155,6 @@ class CreateHeatmapsBase(abc.ABC):
             ids_name = ids_base_name
         else:
             simtag = self.true_target
-
-            # xxx mark delete Aug 22 2025 xxxxxx
-            #if "SNIaMODEL" in self.lcdata_path :  
-            #    simtag = SIMTAG_Ia 
-            #else:                                 
-            #    simtag = SIMTAG_nonIa 
-            # xxxxxxxxx end mark 
-
             ids_name = ids_base_name + '_'  + simtag        # ids_Ia or ids_nonIa
 
         return ids_name
@@ -168,17 +169,18 @@ class CreateHeatmapsBase(abc.ABC):
         pass
 
     def create_heatmaps(self, output_paths, mjd_minmaxes, fit_on_full_lc=True):
+
         #TODO: infer this from config file rather than making the subclasses pass it in
         self.fit_on_full_lc = fit_on_full_lc
 
         for output_path, mjd_minmax in zip(output_paths, mjd_minmaxes):
             if not os.path.exists(output_path):
                 os.makedirs(output_path)
-            logging.info(f"job {self.index}: writing to {output_path}" )
+            logging.info(f"job {self.index:3d}: writing to {output_path}" )
 
-            self.done_by_type = {}
+            self.done_by_type    = {}
             self.removed_by_type = {}
-            self.done_ids = []
+            self.done_ids        = []
 
             timings = []
             self.t_start = time.time()  # need this here and to make summary file
@@ -237,7 +239,7 @@ class CreateHeatmapsBase(abc.ABC):
                     self._done(sn_name, sn_id)
                     
             # - - - -
-            logging.info(f"job {self.index}: Finished processing " \
+            logging.info(f"job {self.index:3d}: Finished processing " \
                          f"{n_lc_write} of {n_lc_read} light curves.")
 
             # - - - - - 
@@ -248,9 +250,9 @@ class CreateHeatmapsBase(abc.ABC):
     def print_heatmap_status(self,i):
         # Created Jun 2024 by R.Kessler
         # print status every 1000 events, and predict remaining time after 1st 1000 events.
-        if i % 1000 == 0:
+        if i % 1000 == 0 :
             n_lc = len(self.ids_for_current_file)
-            logging.info(f"job {self.index}: processing {i} of {n_lc} light curves" )
+            logging.info(f"job {self.index:3d}: processing {i} of {n_lc} light curves" )
             if i == 1000:
                 time_to_1000  = (time.time() - self.t_start)/60.0  # minutes
                 time_predict  = (len(self.ids_for_current_file)/1000)*time_to_1000

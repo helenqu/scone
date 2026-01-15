@@ -15,7 +15,7 @@
 #    See new method use_select_file(...)
 # Aug 29 2025 RK - fix rubble from Aug 26; always use a SIMGEN-DUMP file
 #
-# Dec 20 2025 RK - abort immediately of no "trained_model" is given for predict mode.
+# Dec 20 2025 RK - abort immediately if no "trained_model" is given for predict mode.
 #
 
 import os, sys, yaml, shutil, gzip
