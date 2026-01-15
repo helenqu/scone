@@ -96,7 +96,7 @@ class SconeClassifier():
             self.process = None  # No monitoring for production mode
 
         self.output_path    = config['output_path']
-        self.heatmaps_paths = config['heatmaps_paths'] if 'heatmaps_paths' in config else config['heatmaps_path'] # #TODO(6/21/23): eventually remove, for backwards compatibility
+        self.heatmaps_paths = config['heatmaps_paths'] if 'heatmaps_paths' in config else config['heatmaps_path'] 
         self.mode = config["mode"]
 
         self.strategy = tf.distribute.MirroredStrategy()
@@ -153,12 +153,6 @@ class SconeClassifier():
         
         # Setup debug modes
         self._setup_debug_modes()  # Configure debug behavior based on flag value
-
-        # xxxx mark delete Oct 31 2025 xxxxxx
-        #self.LEGACY = 'sim_fraction' in config
-        #self.REFAC  = not self.LEGACY
-        #logging.info(f"LEGACY code: {self.LEGACY}")
-        # xxxxxxxxxxxxxxx 
 
         return
     
@@ -418,7 +412,6 @@ class SconeClassifier():
         predict_file = os.path.join(self.output_path, PREDICT_CSV_FILE_BASE)
         pd.DataFrame(predict_dict).to_csv(predict_file, index=False) 
 
-        # xxxx mark delete Haloween 2025  if self.LEGACY : return
 
         # re-write csv file with snid as first column, and with prob_preds
         # renamed based on user input key prob_column_name.
@@ -501,11 +494,6 @@ class SconeClassifier():
             raw_dataset = self._load_dataset()
             if self.process:  # Only log memory if debugging/monitoring is enabled
                 self.log_memory_usage("After loading raw dataset", True) 
-
-            # xxxx mark delete Halloween 2025 xxxx
-            #if self.debug_pause_mode:  # Only pause if explicitly enabled
-            #    self._debug_pause_with_memory_report("Raw dataset loaded")  # Pause after raw data loading
-            # xxxxxxxx
             
             debug_flag = self.debug_flag
             # Choose retrieve_data implementation based on debug flag  # 30th Oct, 2025, A. Mitra - Simplified logic
@@ -520,7 +508,6 @@ class SconeClassifier():
                 dataset, size = self._retrieve_data(raw_dataset)  # refactored Sep 2025, A.Mitra
             else:
                 sys.exit(f"n ABORT with undefined debug_flag = {debug_flag}")
-                # v.xyz
             
             if self.process:  # Only log memory if debugging/monitoring is enabled
                 self.log_memory_usage("Finished processing dataset setup", True)
@@ -544,10 +531,6 @@ class SconeClassifier():
             if self.process:  # Only log memory if debugging/monitoring is enabled
                 self.log_memory_usage("After prediction", False)
 
-            # xxx mark delete 
-            #if self.debug_pause_mode:  # Only pause if explicitly enabled
-            #    self._debug_pause_with_memory_report("Prediction completed") 
-            # xxxx 
             self.write_predict_csv_file(predict_dict)
             history = { "accuracy": [acc] }
         else :
@@ -641,37 +624,6 @@ class SconeClassifier():
         # end log_memory_usage 
 
         
-    def log_memory_usage_legacy(self, step_name):
-
-        # xxxx mark obsolete Halloween 2025 xxxxxxxx
-
-        """
-        Log current memory usage at a specific execution step.
-
-        Tracks both process-specific memory (RSS - Resident Set Size) and
-        system-wide memory statistics. Used throughout the codebase to monitor
-        memory consumption patterns and identify potential memory issues.
-
-        Args:
-            step_name (str): Description of the current execution step for logging context
-                           (e.g., "After model loading", "During prediction batch 100")
-
-        Note:
-            - Only logs if self.process is initialized (controlled by memory_optimize config)
-            - Memory values reported in GB for readability
-            - Includes system memory percentage and available memory
-        """
-        if not self.process:  # Skip if process monitoring not initialized
-            return
-        memory_info = self.process.memory_info()
-        system_memory = psutil.virtual_memory()
-        
-        process_rss_gb = memory_info.rss / (1024**3)
-        system_used_gb = system_memory.used / (1024**3)
-        system_available_gb = system_memory.available / (1024**3)
-        system_total_gb = system_memory.total / (1024**3)
-        
-        logging.info(f"{step_name}: Process Memory: {process_rss_gb:.2f} GB | System Used: {system_used_gb:.1f}/{system_total_gb:.1f} GB ({system_memory.percent:.1f}%) | Available: {system_available_gb:.1f} GB")
 
     def write_filter_wavelengths(self,outdir_train_model):
 
@@ -1758,13 +1710,12 @@ class SconeClassifier():
         """
         logging.info("🧪 DRY RUN MODE: Testing memory baseline without data loading")
         self.log_memory_usage("Dry run start (before TensorFlow initialization)", True)
-        # xxx mark self._debug_pause_with_memory_report("Initial state (before TensorFlow setup)")
+
         
         # Initialize TensorFlow strategy (this can use significant memory)  # 8th Sept, 2025, A. Mitra - TF setup memory impact
         logging.info("Initializing TensorFlow distributed strategy...")
         strategy_test = tf.distribute.MirroredStrategy()
         self.log_memory_usage("After TensorFlow strategy initialization", True)
-        # xxx mark self._debug_pause_with_memory_report("TensorFlow strategy initialized")
         
         # Load model if specified (major memory consumer)  # 8th Sept, 2025, A. Mitra - Model loading memory impact
         if self.external_trained_model:
@@ -1772,22 +1723,19 @@ class SconeClassifier():
             test_model = models.load_model(self.external_trained_model, 
                                          custom_objects={"Reshape": self.Reshape})
             self.log_memory_usage("After model loading", True)
-            # xxx mark self._debug_pause_with_memory_report("Model loaded")
             
             # Apply quantization if enabled  # 8th Sept, 2025, A. Mitra - Quantization memory impact
             if self.enable_model_quantization:
                 logging.info("Applying model quantization...")
                 quantized_model = self._apply_model_quantization(test_model)
                 self.log_memory_usage("After model quantization", True)
-                # xxx mark self._debug_pause_with_memory_report("Model quantized")
-                del test_model  # 8th Sept, 2025, A. Mitra - Clean up original model
+                del test_model  
             
-        # Test empty dataset creation (TensorFlow overhead)  # 8th Sept, 2025, A. Mitra - TF dataset memory overhead
+        # Test empty dataset creation (TensorFlow overhead) 
         logging.info("Testing empty dataset creation...")
         empty_dataset = tf.data.Dataset.from_tensor_slices([])
         empty_dataset = empty_dataset.batch(self.batch_size)
         self.log_memory_usage("After empty dataset creation", True)
-        # xxx mark self._debug_pause_with_memory_report("Empty dataset created")
         
         # Memory configuration summary  # 8th Sept, 2025, A. Mitra - Configuration impact analysis
         logging.info("="*60)
@@ -2232,6 +2180,23 @@ class SconeClassifierIaModels(SconeClassifier):
 
         return Ia_dataset, non_Ia_dataset
 
+def check_heatmaps_are_done(config):
+
+    # Created Jan 14 2026 by R.Kessler
+    # Check SCONE_SUMMARY under heatmaps/ subdir, and abort if
+    #   SCONE_SUMMARY file does not exist, or
+    #   STATUS is not 'DONE'.
+
+    heatmap_summ_file = config['heatmaps_path'] + '/' + SCONE_SUMMARY_FILE
+    if not os.path.exists(heatmap_summ_file): 
+        sys.exit(f"\n ERROR: cannot find expected summary file for heatmaps in \n\t {heatmap_summ_file}")
+
+    heatmap_summ_info = util.load_config_expandvars(heatmap_summ_file, [] )
+    status = heatmap_summ_info['STATUS'] 
+    if status != 'DONE' :
+        sys.exit(f"\n ERROR: heatmap status = {status} (expect DONE) in \n\t {heatmap_summ_file}")
+        
+    return  # end check_heatmaps_are done
 
 def get_args():
 
@@ -2324,6 +2289,9 @@ if __name__ == "__main__":
 
     # define full path to heatmaps based on subdir
     scone_config['heatmaps_path'] = os.path.join(scone_config['output_path'],args.heatmaps_subdir)
+
+    # Jan 2026 RK - make sure heatmap generation is done
+    check_heatmaps_are_done(scone_config)
 
     # Handle debug_flag: command-line overrides config file  # 3rd Sept, 2025, A. Mitra - Implement priority system for debug flag
     if args.debug_flag is not None:
