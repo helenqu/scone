@@ -41,7 +41,7 @@ KEY_BAND_TO_WAVE = 'band_to_wave'
 def setup_logging():
     #logging.basicConfig(level=logging.DEBUG,
     logging.basicConfig(level=logging.INFO,
-        format="[%(levelname)6s |%(filename)15s]   %(message)s")
+        format="[%(levelname)6s |%(filename)15s] %(message)s")
     logging.getLogger("matplotlib").setLevel(logging.ERROR)
     logging.getLogger("seaborn").setLevel(logging.ERROR)
     return
@@ -110,6 +110,12 @@ def load_config_expandvars(config_file, key_expandvar_list):
                 # make sure path_tmp is a string and not None or False
                 if isinstance(path_tmp,str):
                     config[key_path] = os.path.expandvars(path_tmp)
+
+    # Jan 2026 RK - if output_path = '.', replace with CWD
+    key_output_path = 'output_path'
+    if key_output_path in config:
+        if config[key_output_path] == '.' : 
+            config[key_output_path] = CWD
 
     # TO DO: check that all paths exist ?
     return config

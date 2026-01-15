@@ -41,20 +41,12 @@ class CreateHeatmapsBase(abc.ABC):
         self.SIM_GENTYPE_TO_CLASS = config.setdefault("SIM_GENTYPE_TO_CLASS",{}) 
         self.band_to_wave         = config.setdefault("band_to_wave", None) 
 
-        
-        # xxxxxx mark delete Sep 12 2025 R.Kessler xxxxxx
-        #self.REFAC  = len(self.SIM_GENTYPE_TO_CLASS) > 0  or \
-        #              config.setdefault('prob_column_name',None)
-        #self.LEGACY = not self.REFAC
-        # xxxxxxx end mark xxx
-
         self.IS_DATA_REAL = len(self.SIM_GENTYPE_TO_CLASS) == 0
         self.IS_DATA_SIM  = len(self.SIM_GENTYPE_TO_CLASS) >  0
 
         # - - - - - - - 
         # RK 4.2.2024: if type_to_name map is not already read from sim-data readme,
         #              then use legacy feature to read it from user config file.
-
 
         map_source       = "sim-readme (refac)"
         self.categorical = False  # disable for now; maybe restore later
@@ -244,7 +236,7 @@ class CreateHeatmapsBase(abc.ABC):
 
             # - - - - - 
 
-            self.write_summary_file(heatmap_file)     # Mar 2024 RK - formatted summary 
+            self.write_summary_file(heatmap_file) 
             return
             
     def print_heatmap_status(self,i):
@@ -276,7 +268,7 @@ class CreateHeatmapsBase(abc.ABC):
 
         reject  = False
         ps_dict = self.prescale_heatmaps_dict
-        # xxx mark 9/12/2025 if ps_dict is None or self.LEGACY : 
+
         if ps_dict is None  : 
             return reject  # never reject for predict mode
 
@@ -295,6 +287,8 @@ class CreateHeatmapsBase(abc.ABC):
         # summary file name is heatmap file name with .tfrecord replaced by .summary
         summary_file = heatmap_file.split('.')[0] + '.summary'
         
+        logging.info(f"Create summary file: {summary_file}")
+
         # get process time for this bundle of heatmaps.
         t_proc_minutes  = (time.time() - self.t_start )/60.0
 
