@@ -168,7 +168,6 @@ class CreateHeatmapsBase(abc.ABC):
         for output_path, mjd_minmax in zip(output_paths, mjd_minmaxes):
             if not os.path.exists(output_path):
                 os.makedirs(output_path)
-            logging.info(f"job {self.index:3d}: writing to {output_path}" )
 
             self.done_by_type    = {}
             self.removed_by_type = {}
@@ -180,6 +179,8 @@ class CreateHeatmapsBase(abc.ABC):
             n_lc_write = 0
 
             heatmap_file = f"{output_path}/heatmaps_{self.index:04d}.tfrecord"
+            logging.info(f"job {self.index:3d}: write heatmaps to {heatmap_file}" )
+
             with tf.io.TFRecordWriter(heatmap_file) as writer:
                 for i, sn_id in enumerate(self.ids_for_current_file):
                     self.print_heatmap_status(i)
@@ -340,7 +341,11 @@ class CreateHeatmapsBase(abc.ABC):
         return
 
     def _get_sn_data(self, sn_id, mjd_minmax):
-        #TODO: find a better thing to early return
+
+        # Jan 22 2026 RK 
+        #  + if there is just one obs, sn_lcfilters is a scalar instead of list and causes crash.
+        #    Simple fix is to return None if len(sn_lcfilters) <=1.
+
         sn_metadata = self.metadata[self.metadata.object_id == sn_id]
         if sn_metadata.empty:
             logging.info("sn metadata empty")
@@ -352,12 +357,22 @@ class CreateHeatmapsBase(abc.ABC):
             return sn_name, None
 
         sn_lcdata = self.lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
-        if len(sn_lcdata) == 0 or np.all(sn_lcdata['mjd'] < 0):
-            logging.info("sn lcdata empty")
+        n_lcdata = len(sn_lcdata)
+        if n_lcdata == 0 or np.all(sn_lcdata['mjd'] < 0):
+            logging.info("Insufficient lcdata for sn_id={sn_id} : n_lcdata = {n_lcdata}")
             return sn_name, None
 
-        expected_filters = list(self.band_to_wave.keys())
-        sn_lcdata = sn_lcdata[np.isin(sn_lcdata['passband'], expected_filters)]
+        expected_filters = list(self.band_to_wave.keys())  # valid list of filters
+        sn_lcfilters     = sn_lcdata['passband'].tolist()  # lc filter list; incluces '-' for pad lc rows
+        isin_filt_list   = np.isin(sn_lcfilters, expected_filters)
+
+        if len(sn_lcfilters) <= 1 :            
+            logging.info(f"Insufficient observations for sn_id={sn_id}: sn_lcfilters = {sn_lcfilters}")
+            return sn_name, None
+
+        # xxx mark 1.22.2026: sn_lcdata = sn_lcdata[np.isin(sn_lcdata['passband'], expected_filters)]
+        sn_lcdata = sn_lcdata[isin_filt_list]
+
         if len(sn_lcdata) == 0:
             logging.info("expected filters filtering not working")
             return sn_name, None
