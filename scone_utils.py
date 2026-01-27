@@ -299,6 +299,7 @@ def load_SIM_STAT_SUMMARY(config):
             model     = stat_row.split()[0]
             nlc_gen   = int(stat_row.split()[1])  # not used
             nlc_write = int(stat_row.split()[2])
+
             if 'SNIa' in model:
                 simtag = SIMTAG_Ia
             elif 'NONIa' in model:

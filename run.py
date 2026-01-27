@@ -17,6 +17,9 @@
 #
 # Dec 20 2025 RK - abort immediately if no "trained_model" is given for predict mode.
 #
+# Jan 27 2026 RK - when reading SIMGEN_DUMP[ALL] file (snid_select_file arg), 
+#        select rows with FLAG_ACCEPT=1 (if this column exists).
+#
 
 import os, sys, yaml, shutil, gzip
 import argparse, subprocess
@@ -139,14 +142,22 @@ def create_snid_select_file(config):
             df = pd.read_csv(select_file,
                              comment="#", delim_whitespace=True)
 
-        n_df = len(df)
-        logging.info(f"Read {n_df} rows from snid_select_file {select_file}")
+        n_df_tot = len(df)
+
+        KEY_FLAG_ACCEPT = 'FLAG_ACCEPT'
+        if KEY_FLAG_ACCEPT in list(df.columns):
+            df_select = df.loc[df[KEY_FLAG_ACCEPT] == 1 ]  # Jan 27 2026: needed for SIMGEN_DUMPALL
+        else:
+            df_select = df  # read entire SIMGEN_DUMP file for legacy sims (before FLAG_ACCEPT column)
+
+        n_df = len(df_select)
+        logging.info(f"Read {n_df} (of {n_df_tot}) rows from snid_select_file {select_file}")
         
-        snid_all_list += df['CID'].tolist()    
+        snid_all_list += df_select['CID'].tolist()    
         found_gentype = False        
         for key_gentype in KEYLIST_GENTYPE:
             if key_gentype in df.columns:
-                gentype_all_list += df[key_gentype].tolist()
+                gentype_all_list += df_select[key_gentype].tolist()
                 found_gentype = True
                 
         if IS_MODEL_TRAIN and found_gentype is False:
@@ -158,8 +169,11 @@ def create_snid_select_file(config):
     n_all    = len(snid_all_list)
     n_unique = len(set(snid_all_list))
     if n_unique != n_all:
+        logging.info(f"")
+        logging.info(f"@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
         logging.info(f"WARNING: Found {n_unique} unique SNIDs among {n_all} sim SN.")
-
+        logging.info(f"@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+        logging.info(f"")
     # - - - - - - -
     # check nevt_select and/or prescale options
     snid_list    = snid_all_list     # default with no prescale
