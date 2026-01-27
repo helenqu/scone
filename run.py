@@ -17,8 +17,11 @@
 #
 # Dec 20 2025 RK - abort immediately if no "trained_model" is given for predict mode.
 #
-# Jan 27 2026 RK - when reading SIMGEN_DUMP[ALL] file (snid_select_file arg), 
+# Jan 26 2026 RK - when reading SIMGEN_DUMP[ALL] file (snid_select_file arg), 
 #        select rows with FLAG_ACCEPT=1 (if this column exists).
+#
+# Jan 27 2026 RK - new check_duplicates() method to separately check SIM-Ia and SIM-nonIa,
+#                  and to abort on appropriate error.
 #
 
 import os, sys, yaml, shutil, gzip
@@ -124,7 +127,7 @@ def create_snid_select_file(config):
         for simdir in input_data_paths:
             sim_version_list.append(os.path.basename(simdir))  # Aug 26 2025
 
-    logging.info("Begin reading snid_select_files: ")
+    logging.info("Begin reading [SIMGEN_DUMP] snid_select_files: ")
     snid_all_list    = []
     gentype_all_list = [] 
     for select_file in snid_select_files:
@@ -166,14 +169,8 @@ def create_snid_select_file(config):
             assert False,  msgerr 
     
     # check for duplicates:
-    n_all    = len(snid_all_list)
-    n_unique = len(set(snid_all_list))
-    if n_unique != n_all:
-        logging.info(f"")
-        logging.info(f"@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-        logging.info(f"WARNING: Found {n_unique} unique SNIDs among {n_all} sim SN.")
-        logging.info(f"@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-        logging.info(f"")
+    check_duplicates(is_data, snid_all_list, gentype_all_list, config)
+
     # - - - - - - -
     # check nevt_select and/or prescale options
     snid_list    = snid_all_list     # default with no prescale
@@ -264,6 +261,56 @@ def create_snid_select_file(config):
 
     return n_select
 
+
+def check_duplicates(is_data, snid_all_list, gentype_all_list, config):
+
+    # Created Jan 2026 by R.Kessler
+    # For real data, abort on any duplicate.
+    # For sim, abort on SNIa duplicates, or NONIA duplicates, but allow
+    # duplicates between SNIa and NonIa because Ia and nonIa sims are
+    # often generated separately.
+
+    n_all_list     = []
+    n_dup_list     = []
+    label_dup_list = []
+    valid = True
+
+    if is_data:
+        n_all, n_dup = count_duplicates(snid_all_list)
+        n_all_list = [ n_all ]
+        n_dup_list = [ n_dup ]
+        label_dup_list = [ "Data"]
+        valid = (n_dup == 0)
+    else:
+        SIM_GENTYPE_TO_CLASS = config['SIM_GENTYPE_TO_CLASS']
+        snid_list1 = [ snid for snid, t in zip(snid_all_list, gentype_all_list) \
+                       if SIM_GENTYPE_TO_CLASS[t] == SIMTAG_Ia]
+        snid_list2 = [ snid for snid, t in zip(snid_all_list, gentype_all_list) \
+                       if SIM_GENTYPE_TO_CLASS[t] == SIMTAG_nonIa]
+        n1_all, n1_dup = count_duplicates(snid_list1)
+        n2_all, n2_dup = count_duplicates(snid_list2)
+        n_all_list = [ n1_all, n2_all ]
+        n_dup_list = [ n1_dup, n2_dup ]
+        label_dup_list = [ 'SIM-'+SIMTAG_Ia,  'SIM-'+SIMTAG_nonIa ]
+        valid = (n1_dup == 0) and (n2_dup == 0)
+
+    # - - - - 
+    for n_all, n_dup, label in zip(n_all_list, n_dup_list, label_dup_list):
+        str_err=''
+        if n_dup > 0: str_err = "==> ERROR" 
+        logging.info(f"Found {n_dup} duplicates from {n_all}  {label}  events  {str_err}")
+
+    assert valid,  f"ABORT on invalid {label_dup_list} duplicates; " \
+        f"\n\t see duplicate message(s) above."
+        
+    return
+    
+
+def count_duplicates(snid_list):
+    n_all    = len(snid_list)
+    n_unique = len(set(snid_list))
+    n_dup    = n_all - n_unique
+    return n_all, n_dup
 
 def use_select_file(is_sim, select_file, sim_version_list):
 
