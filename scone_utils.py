@@ -63,14 +63,22 @@ def print_simtag_info(comment, info_list):
 def is_data_real(data_dir):
     # Created Apr 2024
     # returns True if this data dir is real data;
-    # sim is identified by particular keys in readme.
+    # returns False for sim data.
+    # Sim is identified by particular keys in readme.
+    # Real data is identified by incorrect yaml format, or missing STAT_SUMMARY key.
+    #
+    # Jan 28 2026: R.Kessler and C.Meldorf: if not YAML format,
+    #       assume it is data with hacked readme (and do not abort)
 
     version     = os.path.basename(data_dir)
     readme_file   = f"{data_dir}/{version}.README"
 
     with open(readme_file, "r") as r:
-        contents = yaml.load(r, Loader=yaml.Loader)
-        
+        try:
+            contents = yaml.load(r, Loader=yaml.Loader)
+        except:
+            return True  # not yaml, so assume real data readme is hacked
+
     if 'STAT_SUMMARY' in contents[KEY_README_DOCANA]:
         is_data = False
     else:
