@@ -2,17 +2,18 @@
 #
 # Aug 22 2025: fix get_hdf5_ids_name() to be more robust and not rely on SNIaMODEL in FITS file name
 # Sep 12 2025: remove self.LEGACY and self.REFAC .. keep only REFAC code
+# Jan 29 2026: 
+#   + include heatmap PROCESS_RATE (number per minute) in heatmap-summary files
+#   + open START_TIME_STAMP.TXT file
 
 import numpy as np
-import os, sys, logging
 import pandas as pd
-from astropy.table import Table
 import tensorflow as tf
-import yaml
-import argparse
-import h5py
-import time
-import abc
+
+import os, sys, logging, yaml, argparse, h5py, abc, time
+
+from datetime import datetime
+from astropy.table import Table
 from create_heatmaps.helpers import build_gp, image_example, get_extinction, read_fits, get_band_to_wave
 
 
@@ -181,6 +182,15 @@ class CreateHeatmapsBase(abc.ABC):
             heatmap_file = f"{output_path}/heatmaps_{self.index:04d}.tfrecord"
             logging.info(f"job {self.index:3d}: write heatmaps to {heatmap_file}" )
 
+            # create start-time stamp file to track wall time later in SCONE_SUMMARY
+            time_stamp_file = f"{output_path}/START_TIME_STAMP.TXT"
+            if not os.path.exists(time_stamp_file):
+                with open(time_stamp_file,"wt") as t:
+                    tnow = str( datetime.now() )
+                    t.write(f"{tnow}\n")
+                
+            # - - - - -
+            # begin writing heatmap
             with tf.io.TFRecordWriter(heatmap_file) as writer:
                 for i, sn_id in enumerate(self.ids_for_current_file):
                     self.print_heatmap_status(i)
@@ -290,25 +300,34 @@ class CreateHeatmapsBase(abc.ABC):
         
         logging.info(f"Create summary file: {summary_file}")
 
-        # get process time for this bundle of heatmaps.
-        t_proc_minutes  = (time.time() - self.t_start )/60.0
-
         with open(summary_file,"wt") as s:
             s.write(f"PROGRAM_CLASS:  CreateHeatmaps\n")
             s.write(f"SURVEY:         {self.survey} \n")
             s.write(f"HEATMAP_FILE:   {heatmap_file_base}\n")
             s.write(f"JOBID:          {self.index}\n")
-            s.write(f"CPU:            {t_proc_minutes:.2f}            # minutes \n")
             s.write(f"LCDATA_PATH:    {self.lcdata_path} \n")
             s.write(f"PRESCALE_HEATMAPS:  {self.ps_list}\n")
             
+            ntot_lc = 0
             s.write(f"N_LC: \n")
             if self.mode == 'train':
                 for lctype, n_lc in self.done_by_type.items():
+                    ntot_lc += n_lc
                     s.write(f"  {lctype}:  {n_lc:6d}       # TYPE: NLC\n")
+            
             else:
                 n_lc = len(self.done_ids)
+                ntot_lc += n_lc
                 s.write(f"  total:  {n_lc:6d} \n")
+
+            # get process time and process rate for this bundle of heatmaps
+            t_proc_sec      = (time.time() - self.t_start )
+            t_proc_minutes  = t_proc_sec / 60.0
+            proc_rate       = int(ntot_lc / t_proc_minutes)
+
+            s.write(f"\n")
+            s.write(f"CPU:            {t_proc_minutes:.2f}            # minutes \n")
+            s.write(f"PROCESS_RATE:   {proc_rate:5d}     # <n_heatmap per minute> \n")
 
             # cpu ??
             #s.write(f"\n# xxx type_to_int_label = {self.type_to_int_label}\n")
