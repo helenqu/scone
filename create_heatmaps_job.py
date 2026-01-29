@@ -7,10 +7,10 @@
 #
 import os, sys, yaml, logging, glob
 import argparse
-import subprocess
+import subprocess, statistics
 import multiprocessing as mp
 from create_heatmaps.manager import CreateHeatmapsManager
-
+from datetime import datetime
 from   scone_utils import *
 import scone_utils as util
 
@@ -130,7 +130,6 @@ def load_lcdata_metadata(config):
     config[key_lcdata] = []
     n_load = 0
 
-    # .xyz
 
     if key_path in config:
         for data_path in config[key_path]:
@@ -241,12 +240,32 @@ def all_heatmaps_done(args, config):
 
     return all_done
 
+def get_wall_time(config):
+
+    # created Jan 29 2026 by R.Kessler
+    # Read start time from START_TIME_STAMP.TXT (see create_heatmaps/base.py),
+    # and compute total wall time since start time.
+
+    heatmaps_path   = config['heatmaps_path']
+    time_stamp_file = f"{heatmaps_path}/START_TIME_STAMP.TXT"
+    with open(time_stamp_file,"rt") as t:
+        t_start_string = (t.read()).rstrip()
+        format_string  = "%Y-%m-%d %H:%M:%S.%f"
+        t_start   = datetime.strptime(t_start_string, format_string)
+        t_end     = datetime.now()
+        wall_time = (t_end - t_start).total_seconds()
+        wall_time /= 60.0  # convert sec to minutes
+
+    return wall_time
+
 def write_final_summary_file(args, config):
 
     # Created Mar 1 2024 by R.Kessler
     # Read each  heatmap*summary file, sum CPU, sum NLC per type;
     # then write grand summary to a single file that can be read by
     # other pipeline components.
+    # 
+    # Jan 29 2026 RK - include PROCESS_RATE (per minute)
 
     # scoop up list of summary files 
     heatmap_list, summary_list  = get_heatmap_file_list(config)
@@ -264,8 +283,10 @@ def write_final_summary_file(args, config):
     
     # init things that are summed over summary files
     cpu_sum_minutes      = 0.0
+    proc_rate_list       = []
     nlc_sum_dict         = {}
     lcdata_dir_unique    = []
+    n_summ_file = len(summary_list)
 
     for summ_file in summary_list:
         summ_file_path = f"{heatmaps_path}/{summ_file}"
@@ -286,11 +307,16 @@ def write_final_summary_file(args, config):
 
             # sum cpu
             cpu_sum_minutes += float(summary_info['CPU'])
+            proc_rate_list.append( summary_info['PROCESS_RATE'] )
 
             # fetch prescales
             ps_list = summary_info['PRESCALE_HEATMAPS']
 
     # - - - - - - 
+    # read start time from file, and compute wall time
+    wall_time = get_wall_time(config)
+
+
     # create final summary file
 
     with open(final_summary_file,"wt") as s:
@@ -305,9 +331,19 @@ def write_final_summary_file(args, config):
             status = "DONE"
         s.write(f"STATUS:             {status}\n")
 
-        cpu_sum_hr = cpu_sum_minutes/60.0                            
-        s.write(f"CPU_SUM:        {cpu_sum_hr:.3f}   # hr \n")
+        # xxx mark delete cpu_sum_hr = cpu_sum_minutes/60.0     
+        s.write(f"WALL_TIME:      {wall_time:.3f}    # minutes \n")
+        s.write(f"CPU_SUM:        {cpu_sum_minutes:.3f}   # minutes \n")
 
+        rate_mean  = int( statistics.mean(proc_rate_list) )
+        if len(proc_rate_list) > 1:
+            rate_stdev = int ( statistics.stdev(proc_rate_list) )
+        else:
+            rate_stdev = 0
+
+        s.write(f"PROCESS_RATE_AVG:     {rate_mean}    # Avg process rate per minute \n")
+        s.write(f"PROCESS_RATE_STDEV:   {rate_stdev}    # std deviation of process rate \n")
+        
         s.write(f"PRESCALE_HEATMAPS:  {ps_list}    # Ia,nonIa\n")
 
         s.write("N_LC: \n")
@@ -366,7 +402,7 @@ if __name__ == "__main__":
     lcdata_paths = config['lcdata_paths']
     n_lcdata     = len(lcdata_paths)
 
-    # 2023 refactor requires no user-knowledge of file count, and balances CPU load
+    # 2023 refactor requires no user-knowledge of file count, and does better at balancing CPU load
     for jobid in range(0,n_lcdata):
         if jobid % args.nslurm_tot == args.slurm_id:
             lcdata = lcdata_paths[jobid]
