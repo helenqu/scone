@@ -5,20 +5,13 @@
 #     is useful for side-by-side testing of scone codes or options. This code
 #     should still be compatible with both original and refactored scone codes
 #
-import os
-import sys
+import os, sys, yaml, h5py, h5py, time, json
+import argparse, atexit, psutil, gc
+
 import numpy as np
 import pandas as pd
-import yaml
 import tensorflow as tf
 from tensorflow.keras import layers, models, utils, optimizers
-import h5py
-import time
-import json
-import argparse
-import atexit
-import time  # 3rd Sept, 2025, A. Mitra - Added for performance timing and progress tracking
-import psutil  # 3rd Sept, 2025, A. Mitra - Added for real-time memory usage monitoring
 
 from   data_utils  import *
 from   scone_utils import *   # RK - should merge with data_utils ?
@@ -807,7 +800,6 @@ class SconeClassifier():
 
             # Moderate garbage collection
             if self.gc_frequency > 0 and chunk_count % 10 == 0:
-                import gc
                 gc.collect()
 
             # Clear chunk data
@@ -874,7 +866,6 @@ class SconeClassifier():
                     escalated = True
                     
                     # Force immediate garbage collection  # 8th Sept, 2025, A. Mitra - Emergency cleanup
-                    import gc
                     gc.collect()
                     
                     # Check if memory reduced after cleanup  # 8th Sept, 2025, A. Mitra - Verify cleanup effectiveness
@@ -1172,7 +1163,6 @@ class SconeClassifier():
             
             # OPTIMIZED: Less frequent garbage collection
             if batch_count % (self.gc_frequency * 2) == 0:  # Every 100 batches instead of 50
-                import gc
                 gc.collect()  # 5th Sept, 2025, A. Mitra - Free unused memory periodically
                 
             # Clear batch variables to help with memory management  # 5th Sept, 2025, A. Mitra - Explicit cleanup
@@ -1313,7 +1303,6 @@ class SconeClassifier():
                 
                 # OPTIMIZED: Less frequent GC to reduce overhead - only when really needed
                 if self.gc_frequency > 0 and i % (self.micro_batch_size * 20) == 0:  # Much less frequent
-                    import gc
                     gc.collect()
             
             # Combine micro-batch predictions  # 8th Sept, 2025, A. Mitra - Reconstruct full batch predictions
@@ -1421,7 +1410,6 @@ class SconeClassifier():
                         # OPTIMIZED: Less aggressive cleanup - only when really needed
                         del batch
                         if self.gc_frequency > 0 and batch_count_in_file % 50 == 0:  # Much less frequent GC
-                            import gc
                             gc.collect()
                     
                     # Clean up file dataset immediately  # 8th Sept, 2025, A. Mitra - Release file data
@@ -1434,7 +1422,6 @@ class SconeClassifier():
                             self.log_memory_usage(f"Completed file {file_count}/{len(filenames)}, samples: {total_samples}, accuracy: {current_acc:.3f}", False)
                     
                     # Aggressive garbage collection after each file  # 8th Sept, 2025, A. Mitra - Force memory cleanup
-                    import gc
                     gc.collect()
                     
                     # Check if we're exceeding memory target  # 8th Sept, 2025, A. Mitra - Dynamic memory monitoring
@@ -1699,7 +1686,6 @@ class SconeClassifier():
         print(f"="*80)
         
         # Pause execution  # 8th Sept, 2025, A. Mitra - Allow time for external memory inspection
-        import time
         time.sleep(self.pause_duration)
         
         print(f"🔄 Resuming execution after {stage_name} pause\n")
@@ -2282,8 +2268,11 @@ if __name__ == "__main__":
 
     util.print_job_command()
 
+    logging.info(f"tensorflow version: {tf.__version__}")
+
     args = get_args()
 
+    # - - - - 
     key_expandvar_list = [ 'output_path', 'trained_model' ]
     scone_config = util.load_config_expandvars(args.config_path, key_expandvar_list )
 
