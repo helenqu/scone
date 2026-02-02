@@ -1,9 +1,15 @@
 #!/usr/bin/env python
 #
-# Mar 6 2024 RK 
+# Mar 6 2024 RK
 #  +  minor refactor in main to accept optional --heatmaps_subdir argument that
 #     is useful for side-by-side testing of scone codes or options. This code
 #     should still be compatible with both original and refactored scone codes
+#
+# Feb 2 2026 AM
+#  +  Fix TypeError in model training: extract dictionary values before passing
+#     to model.fit() to resolve "Expected float32, but got label of type 'str'" error
+#  +  Fix model saving: save as model.keras file inside trained_model directory
+#     to comply with Keras API requirements for file extensions
 #
 import os
 import sys
@@ -478,7 +484,7 @@ class SconeClassifier():
 
         if self.external_trained_model:
             logging.info(f"loading trained model found at {self.external_trained_model}")
-            self.trained_model = models.load_model(self.external_trained_model, custom_objects={"Reshape": self.Reshape})
+            self.trained_model = self._load_trained_model(self.external_trained_model)
             self._debug_pause_with_memory_report("Model loaded from disk")  # 8th Sept, 2025, A. Mitra - Pause after model loading
 
         if self.mode == MODE_TRAIN:
@@ -559,10 +565,10 @@ class SconeClassifier():
             logging.info("not class balanced, applying class weights")
             class_weights = {k: (self.batch_size / (self.num_types * v)) for k,v in self.abundances.items()}
 
-        train_set = train_set.map(lambda image, label, 
-                                  *args: (image, label)).shuffle(100_000).cache().batch(self.batch_size)
-        val_set = val_set.map(lambda image, label, 
-                              *args: (image, label)).shuffle(10_000).cache().batch(self.batch_size)
+        train_set = train_set.map(lambda image, label,
+                                  *args: (image["image"], label["label"])).shuffle(100_000).cache().batch(self.batch_size)
+        val_set = val_set.map(lambda image, label,
+                              *args: (image["image"], label["label"])).shuffle(10_000).cache().batch(self.batch_size)
         logging.info("starting to train")
         history = model.fit(
             train_set,
@@ -572,7 +578,9 @@ class SconeClassifier():
             class_weight=class_weights if not self.class_balanced else None)
 
         outdir_train_model = f"{self.output_path}/trained_model"
-        model.save(outdir_train_model)
+        os.makedirs(outdir_train_model, exist_ok=True)
+        model_file = f"{outdir_train_model}/model.keras"
+        model.save(model_file)
 
         # Oct 2024 RK - make sure output model has g+rw permissions
         cmd_chmod = f"chmod -R g+rw {outdir_train_model}"
@@ -625,6 +633,31 @@ class SconeClassifier():
 
         
 
+    def _load_trained_model(self, model_path):
+        """
+        Load a trained model from either a directory (old format) or file (new format).
+
+        Args:
+            model_path: Path to model directory or .keras/.h5 file
+
+        Returns:
+            Loaded Keras model
+        """
+        if os.path.isdir(model_path):
+            # Old format: directory containing model files
+            model_file = os.path.join(model_path, "model.keras")
+            if not os.path.exists(model_file):
+                # Fallback to h5 format if keras not found
+                model_file = os.path.join(model_path, "model.h5")
+            if not os.path.exists(model_file):
+                raise ValueError(f"No model.keras or model.h5 found in directory: {model_path}")
+            logging.info(f"Loading model from: {model_file}")
+            return models.load_model(model_file, custom_objects={"Reshape": self.Reshape})
+        else:
+            # New format: direct path to model file
+            logging.info(f"Loading model from: {model_path}")
+            return models.load_model(model_path, custom_objects={"Reshape": self.Reshape})
+
     def write_filter_wavelengths(self,outdir_train_model):
 
         # Created Jun 2024 by R.Kessler
@@ -650,8 +683,7 @@ class SconeClassifier():
 
     def predict(self, dataset, dataset_ids=None):
         if self.external_trained_model and not self.trained_model:
-            self.trained_model = models.load_model(self.external_trained_model,
-                                                   custom_objects={"Reshape": self.Reshape})
+            self.trained_model = self._load_trained_model(self.external_trained_model)
 
         if not self.trained_model:
             raise RuntimeError('model has not been trained! call `train` on the SconeClassifier instance before predict!')
@@ -1720,8 +1752,7 @@ class SconeClassifier():
         # Load model if specified (major memory consumer)  # 8th Sept, 2025, A. Mitra - Model loading memory impact
         if self.external_trained_model:
             logging.info(f"Loading trained model from {self.external_trained_model}")
-            test_model = models.load_model(self.external_trained_model, 
-                                         custom_objects={"Reshape": self.Reshape})
+            test_model = self._load_trained_model(self.external_trained_model)
             self.log_memory_usage("After model loading", True)
             
             # Apply quantization if enabled  # 8th Sept, 2025, A. Mitra - Quantization memory impact

@@ -1,3 +1,8 @@
+#
+# Feb 2 2026 AM
+#  +  Fix TypeError in model training: cast labels to float32 during TFRecord
+#     parsing to resolve "Expected float32, but got label of type 'str'" error
+#
 import os
 import numpy as np
 import tensorflow as tf
@@ -23,9 +28,9 @@ def get_images(raw_record, input_shape, with_z=False):
 
     # TODO: have to subtract 1 from label to get rid of KN in early classification dataset
     if with_z:
-        output = [{"image": image, "z": example["z"], "z_err": example["z_err"]}, {"label": example['label']}, {"id": tf.cast(example['id'], tf.int32)}]
+        output = [{"image": image, "z": example["z"], "z_err": example["z_err"]}, {"label": tf.cast(example['label'], tf.float32)}, {"id": tf.cast(example['id'], tf.int32)}]
     else:
-        output = [{"image": image}, {"label": example['label']}, {"id": tf.cast(example['id'], tf.int32)}]
+        output = [{"image": image}, {"label": tf.cast(example['label'], tf.float32)}, {"id": tf.cast(example['id'], tf.int32)}]
     return output
 
 # balances classes, splits dataset into train/validation/test sets
