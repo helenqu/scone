@@ -6,7 +6,7 @@ import pandas as pd
 
 class CreateHeatmapsFull(CreateHeatmapsBase):
     def run(self):
-        self.create_heatmaps([self.output_path], [[-30, 150]])
+        self.create_heatmaps([self.output_path], [[-30, 150]])  # RK fragile warning in last arg
 
     @staticmethod
     def _calculate_mjd_range(sn_metadata, sn_data, mjd_minmax, has_peakmjd):

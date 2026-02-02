@@ -2,17 +2,18 @@
 #
 # Aug 22 2025: fix get_hdf5_ids_name() to be more robust and not rely on SNIaMODEL in FITS file name
 # Sep 12 2025: remove self.LEGACY and self.REFAC .. keep only REFAC code
+# Jan 29 2026: 
+#   + include heatmap PROCESS_RATE (number per minute) in heatmap-summary files
+#   + open START_TIME_STAMP.TXT file
 
 import numpy as np
-import os, sys, logging
 import pandas as pd
-from astropy.table import Table
 import tensorflow as tf
-import yaml
-import argparse
-import h5py
-import time
-import abc
+
+import os, sys, logging, yaml, argparse, h5py, abc, time
+
+from datetime import datetime
+from astropy.table import Table
 from create_heatmaps.helpers import build_gp, image_example, get_extinction, read_fits, get_band_to_wave
 
 
@@ -41,20 +42,12 @@ class CreateHeatmapsBase(abc.ABC):
         self.SIM_GENTYPE_TO_CLASS = config.setdefault("SIM_GENTYPE_TO_CLASS",{}) 
         self.band_to_wave         = config.setdefault("band_to_wave", None) 
 
-        
-        # xxxxxx mark delete Sep 12 2025 R.Kessler xxxxxx
-        #self.REFAC  = len(self.SIM_GENTYPE_TO_CLASS) > 0  or \
-        #              config.setdefault('prob_column_name',None)
-        #self.LEGACY = not self.REFAC
-        # xxxxxxx end mark xxx
-
         self.IS_DATA_REAL = len(self.SIM_GENTYPE_TO_CLASS) == 0
         self.IS_DATA_SIM  = len(self.SIM_GENTYPE_TO_CLASS) >  0
 
         # - - - - - - - 
         # RK 4.2.2024: if type_to_name map is not already read from sim-data readme,
         #              then use legacy feature to read it from user config file.
-
 
         map_source       = "sim-readme (refac)"
         self.categorical = False  # disable for now; maybe restore later
@@ -79,23 +72,28 @@ class CreateHeatmapsBase(abc.ABC):
 
 
     def load_data(self):
-        logging.info(f'job {self.index}: process file {self.lcdata_path}')
+
+        # Jan 14 2026 RK - few fixes to work with empty phot file and not crash; see n_lcdata
+
+        logging.info(f'job {self.index:3d}: process file {self.lcdata_path}')
 
         if os.path.exists(self.finished_filenames_path):
             finished_filenames = pd.read_csv(self.finished_filenames_path)
             if os.path.basename(self.metadata_path) in finished_filenames:
                 logging.info(" file has already been processed, exiting")
                 sys.exit(0)
-
+                
         self.metadata, self.lcdata, survey = \
                 read_fits(self.lcdata_path, self.sn_type_id_to_name, self.survey)
 
+        n_lcdata = len(self.lcdata)
+
+        true_target  = None
         if self.IS_DATA_REAL:
             metadata_ids = self.metadata.object_id # take everything for real data
-            true_target  = None
         else:
             metadata_ids = self.metadata[self.metadata.true_target.isin(self.types)].object_id
-            true_target  = self.metadata.true_target.iloc[0]  # Aug 22 2025
+            if n_lcdata > 0 : true_target  = self.metadata.true_target.iloc[0] 
 
         self.lcdata.add_index('object_id')
         self.lcdata['passband'] = [flt.strip() for flt in self.lcdata['passband']]
@@ -108,7 +106,7 @@ class CreateHeatmapsBase(abc.ABC):
 
         ids_path = self.hdf5_select_file      # refactored, RK
 
-        if ids_path:
+        if ids_path and n_lcdata > 0 :
             logging.info(f"Open snid-select file:  {ids_path}")
             ids_file     = h5py.File(ids_path, "r")
             ids_name     = self.get_hdf5_ids_name()
@@ -121,11 +119,15 @@ class CreateHeatmapsBase(abc.ABC):
         else:
             self.ps_list = [ 1, 1]
         
-        self.has_ids = ids_path and self.ids is not None
-        self.ids_for_current_file = np.intersect1d(self.lcdata_ids, self.ids) \
-                                    if self.has_ids else self.lcdata_ids
+        if n_lcdata > 0:
+            self.has_ids = ids_path and self.ids is not None
+            self.ids_for_current_file = np.intersect1d(self.lcdata_ids, self.ids) \
+                                        if self.has_ids else self.lcdata_ids
+        else:
+            self.has_ids = []
+            self.ids_for_current_file = []
 
-        logging.info(f"job {self.index}: {'found' if self.has_ids else 'no'} idList, " \
+        logging.info(f"job {self.index:3d}: {'found' if self.has_ids else 'no'} idList, " \
                      f"expect {len(self.ids_for_current_file)}/{len(self.lcdata_ids)} heatmaps for this file")
 
         return
@@ -146,14 +148,6 @@ class CreateHeatmapsBase(abc.ABC):
             ids_name = ids_base_name
         else:
             simtag = self.true_target
-
-            # xxx mark delete Aug 22 2025 xxxxxx
-            #if "SNIaMODEL" in self.lcdata_path :  
-            #    simtag = SIMTAG_Ia 
-            #else:                                 
-            #    simtag = SIMTAG_nonIa 
-            # xxxxxxxxx end mark 
-
             ids_name = ids_base_name + '_'  + simtag        # ids_Ia or ids_nonIa
 
         return ids_name
@@ -168,17 +162,17 @@ class CreateHeatmapsBase(abc.ABC):
         pass
 
     def create_heatmaps(self, output_paths, mjd_minmaxes, fit_on_full_lc=True):
+
         #TODO: infer this from config file rather than making the subclasses pass it in
         self.fit_on_full_lc = fit_on_full_lc
 
         for output_path, mjd_minmax in zip(output_paths, mjd_minmaxes):
             if not os.path.exists(output_path):
                 os.makedirs(output_path)
-            logging.info(f"job {self.index}: writing to {output_path}" )
 
-            self.done_by_type = {}
+            self.done_by_type    = {}
             self.removed_by_type = {}
-            self.done_ids = []
+            self.done_ids        = []
 
             timings = []
             self.t_start = time.time()  # need this here and to make summary file
@@ -186,6 +180,17 @@ class CreateHeatmapsBase(abc.ABC):
             n_lc_write = 0
 
             heatmap_file = f"{output_path}/heatmaps_{self.index:04d}.tfrecord"
+            logging.info(f"job {self.index:3d}: write heatmaps to {heatmap_file}" )
+
+            # create start-time stamp file to track wall time later in SCONE_SUMMARY
+            time_stamp_file = f"{output_path}/START_TIME_STAMP.TXT"
+            if not os.path.exists(time_stamp_file):
+                with open(time_stamp_file,"wt") as t:
+                    tnow = str( datetime.now() )
+                    t.write(f"{tnow}\n")
+                
+            # - - - - -
+            # begin writing heatmap
             with tf.io.TFRecordWriter(heatmap_file) as writer:
                 for i, sn_id in enumerate(self.ids_for_current_file):
                     self.print_heatmap_status(i)
@@ -237,20 +242,20 @@ class CreateHeatmapsBase(abc.ABC):
                     self._done(sn_name, sn_id)
                     
             # - - - -
-            logging.info(f"job {self.index}: Finished processing " \
+            logging.info(f"job {self.index:3d}: Finished processing " \
                          f"{n_lc_write} of {n_lc_read} light curves.")
 
             # - - - - - 
 
-            self.write_summary_file(heatmap_file)     # Mar 2024 RK - formatted summary 
+            self.write_summary_file(heatmap_file) 
             return
             
     def print_heatmap_status(self,i):
         # Created Jun 2024 by R.Kessler
         # print status every 1000 events, and predict remaining time after 1st 1000 events.
-        if i % 1000 == 0:
+        if i % 1000 == 0 :
             n_lc = len(self.ids_for_current_file)
-            logging.info(f"job {self.index}: processing {i} of {n_lc} light curves" )
+            logging.info(f"job {self.index:3d}: processing {i} of {n_lc} light curves" )
             if i == 1000:
                 time_to_1000  = (time.time() - self.t_start)/60.0  # minutes
                 time_predict  = (len(self.ids_for_current_file)/1000)*time_to_1000
@@ -274,7 +279,7 @@ class CreateHeatmapsBase(abc.ABC):
 
         reject  = False
         ps_dict = self.prescale_heatmaps_dict
-        # xxx mark 9/12/2025 if ps_dict is None or self.LEGACY : 
+
         if ps_dict is None  : 
             return reject  # never reject for predict mode
 
@@ -293,25 +298,36 @@ class CreateHeatmapsBase(abc.ABC):
         # summary file name is heatmap file name with .tfrecord replaced by .summary
         summary_file = heatmap_file.split('.')[0] + '.summary'
         
-        # get process time for this bundle of heatmaps.
-        t_proc_minutes  = (time.time() - self.t_start )/60.0
+        logging.info(f"Create summary file: {summary_file}")
 
         with open(summary_file,"wt") as s:
             s.write(f"PROGRAM_CLASS:  CreateHeatmaps\n")
             s.write(f"SURVEY:         {self.survey} \n")
             s.write(f"HEATMAP_FILE:   {heatmap_file_base}\n")
             s.write(f"JOBID:          {self.index}\n")
-            s.write(f"CPU:            {t_proc_minutes:.2f}            # minutes \n")
             s.write(f"LCDATA_PATH:    {self.lcdata_path} \n")
             s.write(f"PRESCALE_HEATMAPS:  {self.ps_list}\n")
             
+            ntot_lc = 0
             s.write(f"N_LC: \n")
             if self.mode == 'train':
                 for lctype, n_lc in self.done_by_type.items():
+                    ntot_lc += n_lc
                     s.write(f"  {lctype}:  {n_lc:6d}       # TYPE: NLC\n")
+            
             else:
                 n_lc = len(self.done_ids)
+                ntot_lc += n_lc
                 s.write(f"  total:  {n_lc:6d} \n")
+
+            # get process time and process rate for this bundle of heatmaps
+            t_proc_sec      = (time.time() - self.t_start )
+            t_proc_minutes  = t_proc_sec / 60.0
+            proc_rate       = int(ntot_lc / t_proc_minutes)
+
+            s.write(f"\n")
+            s.write(f"CPU:            {t_proc_minutes:.2f}            # minutes \n")
+            s.write(f"PROCESS_RATE:   {proc_rate:5d}     # <n_heatmap per minute> \n")
 
             # cpu ??
             #s.write(f"\n# xxx type_to_int_label = {self.type_to_int_label}\n")
@@ -344,7 +360,11 @@ class CreateHeatmapsBase(abc.ABC):
         return
 
     def _get_sn_data(self, sn_id, mjd_minmax):
-        #TODO: find a better thing to early return
+
+        # Jan 22 2026 RK 
+        #  + if there is just one obs, sn_lcfilters is a scalar instead of list and causes crash.
+        #    Simple fix is to return None if len(sn_lcfilters) <=1.
+
         sn_metadata = self.metadata[self.metadata.object_id == sn_id]
         if sn_metadata.empty:
             logging.info("sn metadata empty")
@@ -356,12 +376,22 @@ class CreateHeatmapsBase(abc.ABC):
             return sn_name, None
 
         sn_lcdata = self.lcdata.loc['object_id', sn_id]['mjd', 'flux', 'flux_err', 'passband']
-        if len(sn_lcdata) == 0 or np.all(sn_lcdata['mjd'] < 0):
-            logging.info("sn lcdata empty")
+        n_lcdata = len(sn_lcdata)
+        if n_lcdata == 0 or np.all(sn_lcdata['mjd'] < 0):
+            logging.info("Insufficient lcdata for sn_id={sn_id} : n_lcdata = {n_lcdata}")
             return sn_name, None
 
-        expected_filters = list(self.band_to_wave.keys())
-        sn_lcdata = sn_lcdata[np.isin(sn_lcdata['passband'], expected_filters)]
+        expected_filters = list(self.band_to_wave.keys())  # valid list of filters
+        sn_lcfilters     = sn_lcdata['passband'].tolist()  # lc filter list; incluces '-' for pad lc rows
+        isin_filt_list   = np.isin(sn_lcfilters, expected_filters)
+
+        if len(sn_lcfilters) <= 1 :            
+            logging.info(f"Insufficient observations for sn_id={sn_id}: sn_lcfilters = {sn_lcfilters}")
+            return sn_name, None
+
+        # xxx mark 1.22.2026: sn_lcdata = sn_lcdata[np.isin(sn_lcdata['passband'], expected_filters)]
+        sn_lcdata = sn_lcdata[isin_filt_list]
+
         if len(sn_lcdata) == 0:
             logging.info("expected filters filtering not working")
             return sn_name, None

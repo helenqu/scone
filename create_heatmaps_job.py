@@ -3,13 +3,14 @@
 #
 # Feb 29 2024 RK - begin major refactor (see github issue...)
 # Oct 21 2024 RK - allow gzip or unzipped data (PHOT and HEAD files)
-
+# Jan 14 2026 RK - write N_HEATMAP_EXPECT and STATUS (DONE or NOT_DONE) to SCONE_SUMMARY.LOG
+#
 import os, sys, yaml, logging, glob
 import argparse
-import subprocess
+import subprocess, statistics
 import multiprocessing as mp
 from create_heatmaps.manager import CreateHeatmapsManager
-
+from datetime import datetime
 from   scone_utils import *
 import scone_utils as util
 
@@ -67,7 +68,6 @@ def get_args():
 def load_config(args):
 
     config_path = args.config_path
-    LEGACY      = (args.start is not None)
 
     key_expandvar_list = [ 'input_data_paths', 'lcdata_paths', 'metadata_paths', 
                            'heatmaps_path', 'output_path', 
@@ -96,13 +96,7 @@ def load_config(args):
         # training is always sim, so read filter mean wave from sim-readme
         util.load_SIM_GENFILTER_WAVE(config)  
 
-    #if LEGACY:
-    #    logging.info(f"LEGACY override {KEY_BAND_TO_WAVE} with old hard-wired defaults")
-    #    config[KEY_BAND_TO_WAVE] = None
-        
-    key = 'sim_fraction'  # legacy key for old run.py
-    config[key] = config.setdefault(key,1)
-    
+            
     key = 'heatmaps_path'
     config[key] = config['output_path'] + '/' + args.heatmaps_subdir
 
@@ -135,6 +129,7 @@ def load_lcdata_metadata(config):
     config[key_meta]   = []
     config[key_lcdata] = []
     n_load = 0
+
 
     if key_path in config:
         for data_path in config[key_path]:
@@ -212,11 +207,16 @@ def remove_load_prescale(config):
     
     return
 
-def write_log_fail_message(args, config, failed_jobid_list):
+def write_log_fail_message(args, config, failed_jobid_list, failed_lcdata_list):
 
     msg  = f"\n{MSG_DONEFILE_FAILURE}\n"
-    msg += f"\t Indices of failed create heatmaps jobs: {failed_jobid_list}\n"
-    msg += f"\t For failed indices, check LC data files or metadata in config yml at \n" \
+
+    for jobid, lcdata in zip(failed_jobid_list, failed_lcdata_list):
+        msg += f"\t heatmap jobid {jobid} FAILED for {lcdata}\n"
+
+    # xxx mark delete msg += f"\t Indices of failed create heatmaps jobs: {failed_jobid_list}\n"
+    msg += '\n'
+    msg += f"\t Check failed LC data files or metadata in config yml at \n" \
            f"\t\t {args.config_path}\n"
     msg += f"\t see above for logs\n"
     logging.info(f"{msg}")
@@ -240,15 +240,32 @@ def all_heatmaps_done(args, config):
 
     return all_done
 
+def get_wall_time(config):
+
+    # created Jan 29 2026 by R.Kessler
+    # Read start time from START_TIME_STAMP.TXT (see create_heatmaps/base.py),
+    # and compute total wall time since start time.
+
+    heatmaps_path   = config['heatmaps_path']
+    time_stamp_file = f"{heatmaps_path}/START_TIME_STAMP.TXT"
+    with open(time_stamp_file,"rt") as t:
+        t_start_string = (t.read()).rstrip()
+        format_string  = "%Y-%m-%d %H:%M:%S.%f"
+        t_start   = datetime.strptime(t_start_string, format_string)
+        t_end     = datetime.now()
+        wall_time = (t_end - t_start).total_seconds()
+        wall_time /= 60.0  # convert sec to minutes
+
+    return wall_time
+
 def write_final_summary_file(args, config):
 
     # Created Mar 1 2024 by R.Kessler
     # Read each  heatmap*summary file, sum CPU, sum NLC per type;
     # then write grand summary to a single file that can be read by
     # other pipeline components.
-
-    LEGACY = (args.start is not None)
-    REFAC  = not LEGACY
+    # 
+    # Jan 29 2026 RK - include PROCESS_RATE (per minute)
 
     # scoop up list of summary files 
     heatmap_list, summary_list  = get_heatmap_file_list(config)
@@ -266,8 +283,10 @@ def write_final_summary_file(args, config):
     
     # init things that are summed over summary files
     cpu_sum_minutes      = 0.0
+    proc_rate_list       = []
     nlc_sum_dict         = {}
     lcdata_dir_unique    = []
+    n_summ_file = len(summary_list)
 
     for summ_file in summary_list:
         summ_file_path = f"{heatmaps_path}/{summ_file}"
@@ -288,29 +307,44 @@ def write_final_summary_file(args, config):
 
             # sum cpu
             cpu_sum_minutes += float(summary_info['CPU'])
+            proc_rate_list.append( summary_info['PROCESS_RATE'] )
 
             # fetch prescales
             ps_list = summary_info['PRESCALE_HEATMAPS']
 
     # - - - - - - 
+    # read start time from file, and compute wall time
+    wall_time = get_wall_time(config)
+
+
     # create final summary file
 
     with open(final_summary_file,"wt") as s:
 
         s.write(f"PROGRAM_CLASS:      {PROGRAM_CLASS_HEATMAPS}\n")
-        s.write(f"N_HEATMAP_FILE:     {n_heatmap_found}    # expect {n_summ_expect}\n")
-        s.write(f"N_HEATMAP_SUMMARY:  {n_summ_found}    # expect {n_summ_expect} \n")
+        s.write(f"N_HEATMAP_EXPECT:   {n_summ_expect:3d}   # \n")  # RK - added Jan 14 2026
+        s.write(f"N_HEATMAP_FILE:     {n_heatmap_found:3d}    # actual number of heatmaps found\n")
+        s.write(f"N_HEATMAP_SUMMARY:  {n_summ_found:3d}    # actual number of heatmap summaries found \n")
 
-        cpu_sum_hr = cpu_sum_minutes/60.0                            
-        s.write(f"CPU_SUM:        {cpu_sum_hr:.3f}   # hr \n")
+        status = "NOT_DONE"
+        if n_summ_found == n_summ_expect and n_heatmap_found == n_summ_expect :
+            status = "DONE"
+        s.write(f"STATUS:             {status}\n")
 
-        if LEGACY :
-            sim_frac = config['sim_fraction']
-            if sim_frac != 1 :
-                s.write(f"SIM_FRACTION:       {config['sim_fraction']}  # legacy key\n")
+        # xxx mark delete cpu_sum_hr = cpu_sum_minutes/60.0     
+        s.write(f"WALL_TIME:      {wall_time:.3f}    # minutes \n")
+        s.write(f"CPU_SUM:        {cpu_sum_minutes:.3f}   # minutes \n")
 
-        if REFAC:
-            s.write(f"PRESCALE_HEATMAPS:  {ps_list}    # Ia,nonIa\n")
+        rate_mean  = int( statistics.mean(proc_rate_list) )
+        if len(proc_rate_list) > 1:
+            rate_stdev = int ( statistics.stdev(proc_rate_list) )
+        else:
+            rate_stdev = 0
+
+        s.write(f"PROCESS_RATE_AVG:     {rate_mean}    # Avg process rate per minute \n")
+        s.write(f"PROCESS_RATE_STDEV:   {rate_stdev}    # std deviation of process rate \n")
+        
+        s.write(f"PRESCALE_HEATMAPS:  {ps_list}    # Ia,nonIa\n")
 
         s.write("N_LC: \n")
         mode = config['mode']
@@ -363,49 +397,47 @@ if __name__ == "__main__":
 
     proc_list  = []
     jobid_list = []
+    lcdata_list = []
 
+    lcdata_paths = config['lcdata_paths']
+    n_lcdata     = len(lcdata_paths)
 
-    if args.start is not None:
-        # orignal/legacy method; beware unbalanced load per cpu
-        for jobid in range(args.start, args.end):
+    # 2023 refactor requires no user-knowledge of file count, and does better at balancing CPU load
+    for jobid in range(0,n_lcdata):
+        if jobid % args.nslurm_tot == args.slurm_id:
+            lcdata = lcdata_paths[jobid]
             proc = mp.Process(target=create_heatmaps, args=(config, jobid))
             proc.start()
-            logging.info(f"\t started legacy heatmap jobid {jobid}")
+
+            logging.info(f"# =======================================================================")
+            logging.info(f"  start heatmap jobid {jobid} for {os.path.basename(lcdata)}")
             proc_list.append(proc)
             jobid_list.append(jobid)
-    else:
-        # optional refactor; requires no user-knowledge of file count,
-        # and balances CPU load
-        n_lcdata = len(config['lcdata_paths'])
-        for jobid in range(0,n_lcdata):
-            if jobid % args.nslurm_tot == args.slurm_id:
-                proc = mp.Process(target=create_heatmaps, args=(config, jobid))
-                proc.start()
-                logging.info(f"\t started refac heatmap jobid {jobid}")
-                proc_list.append(proc)
-                jobid_list.append(jobid)
+            lcdata_list.append(lcdata) 
 
-    # - - - - - -
+    # - - - - - - - - - - - - - - - - - -
     njob_submit = len(jobid_list)
     logging.info(f"{args.jobid_string}: all {njob_submit} heatmap jobs submitted.")
     
-    for proc, jobid in zip(proc_list, jobid_list) :
+    for proc, jobid, lcdata in zip(proc_list, jobid_list, lcdata_list) :
         proc.join()              # wait until procs are done
-        logging.info(f"\t heatmap jobid {jobid} is done.")
+        logging.info(f"\t heatmap jobid {jobid} is done for {os.path.basename(lcdata)}.")
 
     
     # - - - - 
     # check for failures
-    failed_jobid_list = []
-    for proc, jobid in zip(proc_list,jobid_list):
+    failed_jobid_list   = []
+    failed_lcdata_list  = []
+    for proc, jobid, lcdata in zip(proc_list, jobid_list, lcdata_list):
         if proc.exitcode != 0:
             failed_jobid_list.append(jobid)
+            failed_lcdata_list.append(lcdata)  # RK - Jan 14 2026
 
     if len(failed_jobid_list) == 0:
         donefile_info = MSG_DONEFILE_SUCCESS
     else:
         donefile_info = MSG_DONEFILE_FAILURE
-        write_log_fail_message(args, config, failed_jobid_list)  
+        write_log_fail_message(args, config, failed_jobid_list, failed_lcdata_list)  
 
     # - - - - -  - -
     # always update final summary file 

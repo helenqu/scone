@@ -17,6 +17,7 @@ PROGRAM_CLASS_PREDICT     = "scone_predict"
  
 MODE_TRAIN   = "train"
 MODE_PREDICT = "predict"
+CONFIG_KEY_TRAINED_MODEL =  "trained_model"  # Dec 20 2025, RK
 
 SIMTAG_Ia    = "Ia"      # from GENTYPE_TO_NAME dict in sim readme
 SIMTAG_nonIa = "nonIa"   # and used for internal dictionaries
@@ -40,7 +41,7 @@ KEY_BAND_TO_WAVE = 'band_to_wave'
 def setup_logging():
     #logging.basicConfig(level=logging.DEBUG,
     logging.basicConfig(level=logging.INFO,
-        format="[%(levelname)6s |%(filename)15s]   %(message)s")
+        format="[%(levelname)6s |%(filename)15s] %(message)s")
     logging.getLogger("matplotlib").setLevel(logging.ERROR)
     logging.getLogger("seaborn").setLevel(logging.ERROR)
     return
@@ -62,14 +63,22 @@ def print_simtag_info(comment, info_list):
 def is_data_real(data_dir):
     # Created Apr 2024
     # returns True if this data dir is real data;
-    # sim is identified by particular keys in readme.
+    # returns False for sim data.
+    # Sim is identified by particular keys in readme.
+    # Real data is identified by incorrect yaml format, or missing STAT_SUMMARY key.
+    #
+    # Jan 28 2026: R.Kessler and C.Meldorf: if not YAML format,
+    #       assume it is data with hacked readme (and do not abort)
 
     version     = os.path.basename(data_dir)
     readme_file   = f"{data_dir}/{version}.README"
 
     with open(readme_file, "r") as r:
-        contents = yaml.load(r, Loader=yaml.Loader)
-        
+        try:
+            contents = yaml.load(r, Loader=yaml.Loader)
+        except:
+            return True  # not yaml, so assume real data readme is hacked
+
     if 'STAT_SUMMARY' in contents[KEY_README_DOCANA]:
         is_data = False
     else:
@@ -109,6 +118,12 @@ def load_config_expandvars(config_file, key_expandvar_list):
                 # make sure path_tmp is a string and not None or False
                 if isinstance(path_tmp,str):
                     config[key_path] = os.path.expandvars(path_tmp)
+
+    # Jan 2026 RK - if output_path = '.', replace with CWD
+    key_output_path = 'output_path'
+    if key_output_path in config:
+        if config[key_output_path] == '.' : 
+            config[key_output_path] = CWD
 
     # TO DO: check that all paths exist ?
     return config
@@ -292,6 +307,7 @@ def load_SIM_STAT_SUMMARY(config):
             model     = stat_row.split()[0]
             nlc_gen   = int(stat_row.split()[1])  # not used
             nlc_write = int(stat_row.split()[2])
+
             if 'SNIa' in model:
                 simtag = SIMTAG_Ia
             elif 'NONIa' in model:
