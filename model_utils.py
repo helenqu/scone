@@ -1,9 +1,13 @@
 #!/usr/bin/env python
 #
-# Mar 6 2024 RK 
+# Mar 6 2024 RK
 #  +  minor refactor in main to accept optional --heatmaps_subdir argument that
 #     is useful for side-by-side testing of scone codes or options. This code
 #     should still be compatible with both original and refactored scone codes
+#
+# Feb 2 2026 AM
+#  +  Fix TypeError in model training: extract dictionary values before passing
+#     to model.fit() to resolve "Expected float32, but got label of type 'str'" error
 #
 import os
 import sys
@@ -576,10 +580,10 @@ class SconeClassifier():
             logging.info("not class balanced, applying class weights")
             class_weights = {k: (self.batch_size / (self.num_types * v)) for k,v in self.abundances.items()}
 
-        train_set = train_set.map(lambda image, label, 
-                                  *args: (image, label)).shuffle(100_000).cache().batch(self.batch_size)
-        val_set = val_set.map(lambda image, label, 
-                              *args: (image, label)).shuffle(10_000).cache().batch(self.batch_size)
+        train_set = train_set.map(lambda image, label,
+                                  *args: (image["image"], label["label"])).shuffle(100_000).cache().batch(self.batch_size)
+        val_set = val_set.map(lambda image, label,
+                              *args: (image["image"], label["label"])).shuffle(10_000).cache().batch(self.batch_size)
         logging.info("starting to train")
         history = model.fit(
             train_set,
