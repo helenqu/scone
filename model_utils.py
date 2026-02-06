@@ -239,21 +239,75 @@ class SconeClassifier():
 
             # Rule 2: Large total size (>40 GB) needs streaming even with smaller records
             elif total_size_gb > 40:
-                # Scale threshold based on size: 40-100GB -> 30K, >100GB -> 20K, >200GB -> 10K
-                if total_size_gb > 200:
-                    adjusted_threshold = min(self.streaming_threshold, 10000)
-                elif total_size_gb > 100:
-                    adjusted_threshold = min(self.streaming_threshold, 20000)
-                else:  # 40-100 GB
-                    adjusted_threshold = min(self.streaming_threshold, 30000)
+                # FIXED: Calculate threshold based on available memory and record size
+                # This prevents OOM by ensuring we don't try to load more than available memory
+                try:
+                    # Check for SLURM memory constraints first (job-specific limits)
+                    slurm_mem_gb = None
+                    if 'SLURM_MEM_PER_NODE' in os.environ:
+                        # Memory in MB
+                        slurm_mem_gb = float(os.environ['SLURM_MEM_PER_NODE']) / 1024
+                    elif 'SLURM_MEM_PER_CPU' in os.environ:
+                        # Memory in MB, multiply by number of CPUs
+                        slurm_mem_per_cpu = float(os.environ['SLURM_MEM_PER_CPU']) / 1024
+                        num_cpus = int(os.environ.get('SLURM_CPUS_ON_NODE', 1))
+                        slurm_mem_gb = slurm_mem_per_cpu * num_cpus
 
-                if adjusted_threshold < self.streaming_threshold:
-                    logging.info(f"Large total dataset ({total_size_gb:.1f} GB), adjusting streaming threshold from {self.streaming_threshold} to {adjusted_threshold}")
-                    if save_original:
-                        self._original_streaming_threshold = self.streaming_threshold
-                    self.streaming_threshold = adjusted_threshold
-                    self._threshold_already_adjusted = True
-                    return True
+                    # Use SLURM limit if available, otherwise use system available memory
+                    if slurm_mem_gb is not None:
+                        available_memory_gb = slurm_mem_gb
+                        memory_source = "SLURM allocation"
+                    else:
+                        memory = psutil.virtual_memory()
+                        available_memory_gb = memory.available / (1024**3)
+                        memory_source = "system available"
+
+                    # Calculate how many records can fit in available memory
+                    # Use 60% of available memory as safety margin for overhead
+                    if avg_mb_per_record > 0:
+                        max_records_in_memory = int((available_memory_gb * 1024 * 0.6) / avg_mb_per_record)
+
+                        # CRITICAL: If dataset is >20% of available memory, force aggressive streaming
+                        # This prevents OOM when running on nodes with large memory but limited per-process
+                        dataset_memory_ratio = total_size_gb / available_memory_gb if available_memory_gb > 0 else 1.0
+                        if dataset_memory_ratio > 0.20:
+                            # Dataset is large relative to memory - use conservative threshold
+                            # Scale threshold inversely with ratio: 20%→5K, 40%→2.5K, 80%→1.25K
+                            ratio_adjusted_threshold = int(5000 / (dataset_memory_ratio * 5))
+                            adjusted_threshold = max(1000, min(ratio_adjusted_threshold, max_records_in_memory))
+                        else:
+                            # Dataset is small relative to memory - use memory-based calculation
+                            adjusted_threshold = max(1000, min(max_records_in_memory, 30000))
+
+                        if adjusted_threshold < self.streaming_threshold:
+                            logging.info(f"Large total dataset ({total_size_gb:.1f} GB, {avg_mb_per_record:.2f} MB/record)")
+                            logging.info(f"Available memory ({memory_source}): {available_memory_gb:.1f} GB, can fit ~{max_records_in_memory:,} records")
+                            logging.info(f"Adjusting streaming threshold from {self.streaming_threshold} to {adjusted_threshold}")
+                            if save_original:
+                                self._original_streaming_threshold = self.streaming_threshold
+                            self.streaming_threshold = adjusted_threshold
+                            self._threshold_already_adjusted = True
+                            return True
+                    else:
+                        # Fallback if avg_mb_per_record is invalid
+                        adjusted_threshold = 5000
+                        logging.warning(f"Invalid avg_mb_per_record, using conservative threshold: {adjusted_threshold}")
+                        if save_original:
+                            self._original_streaming_threshold = self.streaming_threshold
+                        self.streaming_threshold = adjusted_threshold
+                        self._threshold_already_adjusted = True
+                        return True
+
+                except Exception as e:
+                    # Fallback to conservative threshold if memory detection fails
+                    logging.warning(f"Could not detect available memory: {e}, using conservative threshold")
+                    adjusted_threshold = min(self.streaming_threshold, 5000)
+                    if adjusted_threshold < self.streaming_threshold:
+                        if save_original:
+                            self._original_streaming_threshold = self.streaming_threshold
+                        self.streaming_threshold = adjusted_threshold
+                        self._threshold_already_adjusted = True
+                        return True
 
         return False
 
@@ -639,13 +693,104 @@ class SconeClassifier():
             Loaded Keras model
         """
         if os.path.isdir(model_path):
-            # Old format: directory containing model files
+            # Check if directory contains SavedModel format (saved_model.pb)
+            saved_model_pb = os.path.join(model_path, "saved_model.pb")
+            if os.path.exists(saved_model_pb):
+                # TensorFlow SavedModel format
+                # Keras 3+ doesn't support legacy SavedModel, try TensorFlow directly
+                logging.info(f"Loading legacy SavedModel from directory: {model_path}")
+                try:
+                    # Try TensorFlow's load_model first (for older TF/Keras versions)
+                    return tf.keras.models.load_model(model_path, custom_objects={"Reshape": self.Reshape})
+                except (ValueError, AttributeError) as e:
+                    # If that fails (Keras 3), try using TFSMLayer for inference
+                    logging.warning(f"Cannot load SavedModel with Keras 3: {e}")
+                    logging.info(f"Attempting to load legacy SavedModel using TFSMLayer for inference...")
+
+                    try:
+                        # Use TFSMLayer to load the legacy SavedModel for inference
+                        # First, inspect the SavedModel to understand its structure
+                        loaded = tf.saved_model.load(model_path)
+                        concrete_func = loaded.signatures['serving_default']
+
+                        # Get input spec from the signature
+                        input_specs = concrete_func.structured_input_signature[1]
+                        logging.info(f"SavedModel input specs: {input_specs}")
+
+                        # Create a TFSMLayer
+                        tfsm_layer = tf.keras.layers.TFSMLayer(
+                            model_path,
+                            call_endpoint='serving_default'
+                        )
+
+                        # Create input layers matching the model's expected inputs
+                        if len(input_specs) == 1:
+                            # Single input case (most common)
+                            input_key = list(input_specs.keys())[0]
+                            input_spec = input_specs[input_key]
+                            input_layer = tf.keras.Input(
+                                shape=input_spec.shape[1:],
+                                dtype=input_spec.dtype,
+                                name=input_key
+                            )
+
+                            # Apply TFSMLayer - pass input directly
+                            outputs = tfsm_layer(inputs=input_layer)
+
+                            # Extract output tensor
+                            if isinstance(outputs, dict):
+                                output_tensor = list(outputs.values())[0]
+                            else:
+                                output_tensor = outputs
+
+                            # Create wrapper model
+                            model = tf.keras.Model(inputs=input_layer, outputs=output_tensor)
+                        else:
+                            # Multiple inputs case
+                            inputs = {}
+                            input_dict = {}
+                            for key, spec in input_specs.items():
+                                input_layer = tf.keras.Input(
+                                    shape=spec.shape[1:],
+                                    dtype=spec.dtype,
+                                    name=key
+                                )
+                                inputs[key] = input_layer
+                                input_dict[key] = input_layer
+
+                            # Apply TFSMLayer - pass inputs dict
+                            outputs = tfsm_layer(inputs=input_dict)
+
+                            # Extract output tensor
+                            if isinstance(outputs, dict):
+                                output_tensor = list(outputs.values())[0]
+                            else:
+                                output_tensor = outputs
+
+                            # Create wrapper model
+                            model = tf.keras.Model(inputs=inputs, outputs=output_tensor)
+
+                        logging.info(f"Successfully loaded legacy SavedModel using TFSMLayer")
+                        logging.info(f"Model input shape: {model.input_shape}, output shape: {model.output_shape}")
+                        return model
+
+                    except Exception as tfsm_error:
+                        logging.error(f"Failed to load with TFSMLayer: {tfsm_error}")
+                        logging.error(f"Model at {model_path} is in old SavedModel format incompatible with Keras 3")
+                        logging.error(f"Please retrain the model or convert it to .keras format")
+                        raise ValueError(
+                            f"Legacy SavedModel format not supported in Keras 3. "
+                            f"Model at {model_path} needs to be retrained or converted to .keras format. "
+                            f"TFSMLayer workaround also failed: {tfsm_error}"
+                        )
+
+            # Otherwise look for Keras format files
             model_file = os.path.join(model_path, "model.keras")
             if not os.path.exists(model_file):
                 # Fallback to h5 format if keras not found
                 model_file = os.path.join(model_path, "model.h5")
             if not os.path.exists(model_file):
-                raise ValueError(f"No model.keras or model.h5 found in directory: {model_path}")
+                raise ValueError(f"No model.keras, model.h5, or saved_model.pb found in directory: {model_path}")
             logging.info(f"Loading model from: {model_file}")
             return models.load_model(model_file, custom_objects={"Reshape": self.Reshape})
         else:
@@ -2207,14 +2352,18 @@ def check_heatmaps_are_done(config):
     #   STATUS is not 'DONE'.
 
     heatmap_summ_file = config['heatmaps_path'] + '/' + SCONE_SUMMARY_FILE
-    if not os.path.exists(heatmap_summ_file): 
+    if not os.path.exists(heatmap_summ_file):
         sys.exit(f"\n ERROR: cannot find expected summary file for heatmaps in \n\t {heatmap_summ_file}")
 
     heatmap_summ_info = util.load_config_expandvars(heatmap_summ_file, [] )
-    status = heatmap_summ_info['STATUS'] 
+
+    # FIXED: Handle backward compatibility with older summary files that don't have STATUS
+    # STATUS field was added Jan 14 2026, so older heatmaps won't have it
+    status = heatmap_summ_info.get('STATUS', 'DONE')  # Default to DONE for backward compatibility
+
     if status != 'DONE' :
         sys.exit(f"\n ERROR: heatmap status = {status} (expect DONE) in \n\t {heatmap_summ_file}")
-        
+
     return  # end check_heatmaps_are done
 
 def get_args():
