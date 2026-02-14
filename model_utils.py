@@ -471,7 +471,7 @@ class SconeClassifier():
             predict_base = self.scone_config['output_predict_file']
             
         # xxx mark delete predict_file = os.path.join(self.output_path, PREDICT_CSV_FILE_BASE)
-        predict_file = os.path.join(self.output_path, predict_csv_file)
+        predict_file = os.path.join(self.output_path, predict_base)
         pd.DataFrame(predict_dict).to_csv(predict_file, index=False) 
 
 
