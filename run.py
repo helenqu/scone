@@ -665,7 +665,9 @@ init_env_heatmaps:  source activate scone_cpu_tf2.6
 output_path: <dirname>   # write all output here (clobbers existing folder)
     
 # for predict mode,
-prob_column_name:  PROB_SCONE  # name of PROB colummn in output predictions.csv 
+prob_column_name:  PROB_SCONE  # required: name of PROB colummn in output predictions.csv 
+
+output_predict_file: <name>  # optional base name of output predictions; default=predictions.csv
 
     """
 
