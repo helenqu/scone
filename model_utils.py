@@ -462,9 +462,16 @@ class SconeClassifier():
 
         # Created Apr 4 2024 by R.Kessler
         # write predictions to csv file.
-
-        # create csv file from predictoins
-        predict_file = os.path.join(self.output_path, PREDICT_CSV_FILE_BASE)
+        # Feb 13 2026: check config override for predict file name;
+        #              initial need is to avoid collision in  regression tests
+        #
+        
+        predict_base = PREDICT_CSV_FILE_BASE  # default
+        if 'output_predict_file' in self.scone_config :  # optional config override 
+            predict_base = self.scone_config['output_predict_file']
+            
+        # xxx mark delete predict_file = os.path.join(self.output_path, PREDICT_CSV_FILE_BASE)
+        predict_file = os.path.join(self.output_path, predict_base)
         pd.DataFrame(predict_dict).to_csv(predict_file, index=False) 
 
 
