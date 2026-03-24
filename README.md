@@ -79,17 +79,28 @@ SCONE automatically generates a compressed SNID index (`snid_index.csv.gz`) in t
 ### Visualization
 
 ```bash
-# Plot specific supernovae using the auto-generated index (fast)
+# Plot specific supernovae — index auto-detected from the heatmaps/ dir (fast)
 python tools/visualize_tfrecords.py \
     --tfrecord /path/to/heatmaps/ \
-    --index /path/to/heatmaps/snid_index.csv.gz \
-    --sample_ids 1009,1521,2034 \
+    --snid_list 1009,1521,2034 \
     --output_dir my_plots/
 
-# Plot without index (scans all files sequentially)
+# Save as PDF instead of PNG
 python tools/visualize_tfrecords.py \
     --tfrecord /path/to/heatmaps/ \
-    --sample_ids 1009,1521,2034
+    --snid_list 1009,1521,2034 \
+    --pdf
+
+# Override index location explicitly (only needed if index lives elsewhere)
+python tools/visualize_tfrecords.py \
+    --tfrecord /path/to/heatmaps/ \
+    --index /other/path/snid_index.csv.gz \
+    --snid_list 1009,1521,2034
+
+# Plot without index (scans all files sequentially — fallback if index missing)
+python tools/visualize_tfrecords.py \
+    --tfrecord /path/to/heatmaps/ \
+    --snid_list 1009,1521,2034
 
 # Plot first N samples
 python tools/visualize_tfrecords.py \
