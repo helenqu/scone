@@ -464,11 +464,22 @@ def write_sbatch_for_scone(ARGS, config):
                  f"--config_path  {ARGS.config_path} "
 
 
-    job_string += '\n\n'
+    job_string += '\n'
+    job_string += 'SCONE_EXIT=$?\n\n'
+
+    # Auto-generate SNID index after heatmaps are produced, so users can
+    # look up which tfrecord file contains a given SNID without a full scan.
+    outdir_heatmaps = config['outdir_heatmaps']
+    index_script    = get_jobname(config, os.path.join('tools', 'index_tfrecords.py'))
+    index_output    = os.path.join(outdir_heatmaps, 'snid_index.csv.gz')
+    job_string += f"# Auto-generate SNID index for fast visualization lookup\n"
+    job_string += f"python {index_script} " \
+                  f"--tfrecord {outdir_heatmaps} " \
+                  f"--output {index_output} || true\n\n"
 
     # tack on logic to write SUCCESS or FAILURE to done file
     done_file  = f"{output_path}/{SBATCH_DONE_FILE_BASE}"
-    done_logic = 'if [ $? -eq 0 ]; then \n' \
+    done_logic = 'if [ $SCONE_EXIT -eq 0 ]; then \n' \
                  f"   echo classify SUCCESS >> {done_file} \n" \
                  f"else \n" \
                  f"   echo classify FAILURE >> {done_file} \n" \

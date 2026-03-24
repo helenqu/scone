@@ -72,6 +72,48 @@ This script reads the config file, performs class balancing if desired, and laun
 `python {/path/to/scone}/run_model.py --config_path {/path/to/config}`
 > Note: So far this only works on NERSC! If a different computing system is desired, contact helenqu@sas.upenn.edu.
 
+## Post-processing Tools
+
+SCONE automatically generates a compressed SNID index (`snid_index.csv.gz`) in the heatmaps output directory at the end of every train/predict run. This index maps each SNID to the exact TFRecord file it lives in, enabling fast targeted visualization without scanning all files.
+
+### Visualization
+
+```bash
+# Plot specific supernovae using the auto-generated index (fast)
+python tools/visualize_tfrecords.py \
+    --tfrecord /path/to/heatmaps/ \
+    --index /path/to/heatmaps/snid_index.csv.gz \
+    --sample_ids 1009,1521,2034 \
+    --output_dir my_plots/
+
+# Plot without index (scans all files sequentially)
+python tools/visualize_tfrecords.py \
+    --tfrecord /path/to/heatmaps/ \
+    --sample_ids 1009,1521,2034
+
+# Plot first N samples
+python tools/visualize_tfrecords.py \
+    --tfrecord /path/to/heatmaps/ \
+    --num_samples 5
+
+# Statistical summary plots across many samples
+python tools/visualize_tfrecords.py \
+    --tfrecord /path/to/heatmaps/ \
+    --statistics --stat_samples 1000
+```
+
+Each supernova plot contains 5 panels: flux heatmap, error heatmap, light curve, peak spectrum, and signal-to-noise map.
+
+### Rebuild the index manually
+
+If needed, the index can be rebuilt independently:
+
+```bash
+python tools/index_tfrecords.py \
+    --tfrecord /path/to/heatmaps/ \
+    --output /path/to/heatmaps/snid_index.csv.gz
+```
+
 ## Use with [Pippin](https://github.com/dessn/Pippin/tree/main)
 coming soon!
 
