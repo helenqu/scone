@@ -13,10 +13,10 @@ heatmap data, including:
 Usage:
     python visualize_tfrecords.py --tfrecord heatmaps_0000.tfrecord [--num_samples 5]
     python visualize_tfrecords.py --tfrecord heatmaps_0000.tfrecord --output_dir ./plots
-    python visualize_tfrecords.py --tfrecord heatmaps/ --sample_ids 1009,2034,5678
-    python visualize_tfrecords.py --tfrecord heatmaps_0000.tfrecord --sample_ids 1009,2034,5678
+    python visualize_tfrecords.py --tfrecord heatmaps/ --snid_list 1009,2034,5678
+    python visualize_tfrecords.py --tfrecord heatmaps/ --snid_list 1009,2034,5678 --pdf
 
-When --sample_ids is used and --tfrecord points to a directory, snid_index.csv.gz is
+When --snid_list is used and --tfrecord points to a directory, snid_index.csv.gz is
 automatically looked up in that directory (produced by index_tfrecords.py or run.py).
 Pass --index explicitly only if the index lives elsewhere.
 """
@@ -302,8 +302,8 @@ def main():
     parser.add_argument('--tfrecord', required=True, help='Path to a TFRecord file or a directory containing *.tfrecord files')
     parser.add_argument('--num_samples', type=int, default=5,
                        help='Number of individual samples to visualize')
-    parser.add_argument('--sample_ids', type=str, default=None,
-                       help='Comma-separated list of specific SNID to visualize')
+    parser.add_argument('--snid_list', type=str, default=None,
+                       help='Comma-separated list of specific SNIDs to visualize')
     parser.add_argument('--statistics', action='store_true',
                        help='Create statistical plots across many samples')
     parser.add_argument('--stat_samples', type=int, default=100,
@@ -311,9 +311,13 @@ def main():
     parser.add_argument('--output_dir', type=str, default='./tfrecord_plots',
                        help='Output directory for plots')
     parser.add_argument('--index', type=str, default=None,
-                       help='Path to snid_index.csv.gz (optional override; auto-detected from --tfrecord dir when --sample_ids is used)')
+                       help='Path to snid_index.csv.gz (optional override; auto-detected from --tfrecord dir when --snid_list is used)')
+    parser.add_argument('--pdf', action='store_true',
+                       help='Save plots as PDF instead of PNG')
 
     args = parser.parse_args()
+
+    ext = 'pdf' if args.pdf else 'png'
 
     # Create output directory
     output_dir = Path(args.output_dir)
@@ -332,8 +336,8 @@ def main():
 
     print(f"Output directory: {output_dir}")
 
-    # Auto-detect index when --sample_ids is used and --index not explicitly provided
-    if args.sample_ids and args.index is None and tfrecord_path.is_dir():
+    # Auto-detect index when --snid_list is used and --index not explicitly provided
+    if args.snid_list and args.index is None and tfrecord_path.is_dir():
         candidate = tfrecord_path / 'snid_index.csv.gz'
         if candidate.exists():
             args.index = str(candidate)
@@ -344,14 +348,14 @@ def main():
     # Statistics plot
     if args.statistics:
         print("\nCreating statistical plots...")
-        output_file = output_dir / "statistics.png"
+        output_file = output_dir / f"statistics.{ext}"
         visualize_statistics(tfrecord_files, num_samples=args.stat_samples,
                            output_file=str(output_file))
 
     # Individual sample plots
-    if args.sample_ids:
+    if args.snid_list:
         # Visualize specific SNIDs
-        target_ids = [int(sid.strip()) for sid in args.sample_ids.split(',')]
+        target_ids = [int(sid.strip()) for sid in args.snid_list.split(',')]
         print(f"\nLooking for specific SNIDs: {target_ids}")
 
         if args.index:
@@ -380,7 +384,7 @@ def main():
                     data = parse_tfrecord(raw_record)
                     if data['id'] in ids_in_file:
                         print(f"Found SNID {data['id']}")
-                        output_file = output_dir / f"snid_{data['id']}.png"
+                        output_file = output_dir / f"snid_{data['id']}.{ext}"
                         visualize_single_heatmap(data, output_file=str(output_file))
                         found_ids.add(data['id'])
                         if found_ids >= ids_in_file:
@@ -393,7 +397,7 @@ def main():
                 data = parse_tfrecord(raw_record)
                 if data['id'] in target_ids:
                     print(f"Found SNID {data['id']}")
-                    output_file = output_dir / f"snid_{data['id']}.png"
+                    output_file = output_dir / f"snid_{data['id']}.{ext}"
                     visualize_single_heatmap(data, output_file=str(output_file))
                     found_ids.add(data['id'])
                     if len(found_ids) == len(target_ids):
@@ -408,7 +412,7 @@ def main():
         dataset = tf.data.TFRecordDataset(tfrecord_files)
         for i, raw_record in enumerate(dataset.take(args.num_samples)):
             data = parse_tfrecord(raw_record)
-            output_file = output_dir / f"sample_{i:04d}_snid_{data['id']}.png"
+            output_file = output_dir / f"sample_{i:04d}_snid_{data['id']}.{ext}"
             print(f"Processing sample {i+1}/{args.num_samples}: SNID {data['id']}")
             visualize_single_heatmap(data, output_file=str(output_file))
 
