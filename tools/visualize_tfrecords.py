@@ -13,8 +13,12 @@ heatmap data, including:
 Usage:
     python visualize_tfrecords.py --tfrecord heatmaps_0000.tfrecord [--num_samples 5]
     python visualize_tfrecords.py --tfrecord heatmaps_0000.tfrecord --output_dir ./plots
-    python visualize_tfrecords.py --tfrecord heatmaps_0000.tfrecord --sample_ids 1009,2034,5678
     python visualize_tfrecords.py --tfrecord heatmaps/ --sample_ids 1009,2034,5678
+    python visualize_tfrecords.py --tfrecord heatmaps_0000.tfrecord --sample_ids 1009,2034,5678
+
+When --sample_ids is used and --tfrecord points to a directory, snid_index.csv.gz is
+automatically looked up in that directory (produced by index_tfrecords.py or run.py).
+Pass --index explicitly only if the index lives elsewhere.
 """
 
 import os
@@ -307,7 +311,7 @@ def main():
     parser.add_argument('--output_dir', type=str, default='./tfrecord_plots',
                        help='Output directory for plots')
     parser.add_argument('--index', type=str, default=None,
-                       help='CSV index file from index_tfrecords.py (speeds up --sample_ids lookup)')
+                       help='Path to snid_index.csv.gz (optional override; auto-detected from --tfrecord dir when --sample_ids is used)')
 
     args = parser.parse_args()
 
@@ -327,6 +331,15 @@ def main():
         tfrecord_files = [str(tfrecord_path)]
 
     print(f"Output directory: {output_dir}")
+
+    # Auto-detect index when --sample_ids is used and --index not explicitly provided
+    if args.sample_ids and args.index is None and tfrecord_path.is_dir():
+        candidate = tfrecord_path / 'snid_index.csv.gz'
+        if candidate.exists():
+            args.index = str(candidate)
+            print(f"Auto-detected index: {args.index}")
+        else:
+            print("Note: no snid_index.csv.gz found in tfrecord dir; falling back to sequential scan.")
 
     # Statistics plot
     if args.statistics:
