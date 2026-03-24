@@ -23,6 +23,11 @@
 # Jan 27 2026 RK - new check_duplicates() method to separately check SIM-Ia and SIM-nonIa,
 #                  and to abort on appropriate error.
 #
+# Mar 23 2026 AM - in write_sbatch_for_scone(), inject tools/index_tfrecords.py call
+#    into job.slurm after model_utils.py finishes; auto-generates snid_index.csv.gz
+#    in the heatmaps output directory so users can do fast SNID lookups during
+#    visualization without scanning all TFRecord files.
+#
 
 import os, sys, yaml, shutil, gzip
 import argparse, subprocess
