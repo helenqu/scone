@@ -163,6 +163,8 @@ class CreateHeatmapsBase(abc.ABC):
 
     def create_heatmaps(self, output_paths, mjd_minmaxes, fit_on_full_lc=True):
 
+        logging.info(f"tensorflow version: {tf.__version__}")
+
         #TODO: infer this from config file rather than making the subclasses pass it in
         self.fit_on_full_lc = fit_on_full_lc
 

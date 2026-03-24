@@ -65,10 +65,12 @@ def is_data_real(data_dir):
     # returns True if this data dir is real data;
     # returns False for sim data.
     # Sim is identified by particular keys in readme.
-    # Real data is identified by incorrect yaml format, or missing STAT_SUMMARY key.
+    # Real data is identified by incorrect yaml format, or missing SIM key
     #
     # Jan 28 2026: R.Kessler and C.Meldorf: if not YAML format,
     #       assume it is data with hacked readme (and do not abort)
+    #
+    # Feb 5 2026: use more robus logic for is_data
 
     version     = os.path.basename(data_dir)
     readme_file   = f"{data_dir}/{version}.README"
@@ -79,12 +81,16 @@ def is_data_real(data_dir):
         except:
             return True  # not yaml, so assume real data readme is hacked
 
-    if 'STAT_SUMMARY' in contents[KEY_README_DOCANA]:
-        is_data = False
-    else:
-        is_data = True
+    # check for specific key(s) in DOCANA to identify as sim;
+    # beware that interactive sim and submit_batch jobs produce 
+    # different DOCANA, so check multiple keys.
+    DOCANA              = contents[KEY_README_DOCANA]
+    SIM_DOCANA_KEY_LIST = [ 'STAT_SUMMARY', 'INPUT_KEYS' ] # at last one of these is in sim-README
+    is_sim  = any(item in DOCANA for item in SIM_DOCANA_KEY_LIST)
+    is_data = not is_sim
 
     return is_data
+    # end is_data_real
 
 def load_config_expandvars(config_file, key_expandvar_list):
 
@@ -161,6 +167,11 @@ def compress_files(flag, dir_name, wildcard, name_backup, wildcard_keep ):
         msgerr = f"that could result in removing too much."
         msgerr = f"Provide longer wildcard string."
         log_assert(False,msgerr)
+
+    flist = glob.glob1(dir_name, wildcard)
+    if len(flist) == 0:
+        logging.info(f"WARNING: cannot tar {wildcard} since no such files exist")
+        return
 
     if flag > 0 :
         cmd_tar  = f"tar -cf {tar_file} {wildcard} "

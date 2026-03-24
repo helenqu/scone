@@ -4,7 +4,8 @@
 # Feb 29 2024 RK - begin major refactor (see github issue...)
 # Oct 21 2024 RK - allow gzip or unzipped data (PHOT and HEAD files)
 # Jan 14 2026 RK - write N_HEATMAP_EXPECT and STATUS (DONE or NOT_DONE) to SCONE_SUMMARY.LOG
-#
+# Feb 05 2206 RK - fix crash for real data; check is_data or is_sim
+
 import os, sys, yaml, logging, glob
 import argparse
 import subprocess, statistics
@@ -21,7 +22,7 @@ MSG_DONEFILE_FAILURE = "CREATE HEATMAPS FAILURE"
 
 heatmap_summary_wildcard  =  "heatmap*summary"
 heatmap_file_wildcard     =  "heatmap*tfrecord"
-
+create_heatmap_wildcard   =  "create_heatmaps*"  # Feb 5, 2026
 
 # ============== begin ============
 
@@ -76,7 +77,7 @@ def load_config(args):
     config = util.load_config_expandvars(config_path, key_expandvar_list)
     mode = config['mode']  # train or predict
 
-    # if sim data folders are provided, read list file(s) and set internal array
+    # if data folders are provided, read list file(s) and set internal array
     # for each PHOT.FITS and *HEAD.FITS file
     load_lcdata_metadata(config)
 
@@ -84,9 +85,10 @@ def load_config(args):
     # read info from sim-readme and append it to config as if it were read
     # from scone input file.
 
-    # start by by scooping up DOCUMENTATION-readme info from all sim-data
-    util.load_SIM_README_DOCANA(config)
-    util.load_SIM_GENTYPE_TO_NAME(config)  # read map of gentype <--> Ia,nonIa (train only)
+    if config['is_sim']:
+        # scoop up DOCUMENTATION-readme info from all sim-data
+        util.load_SIM_README_DOCANA(config)
+        util.load_SIM_GENTYPE_TO_NAME(config)  # read map of gentype <--> Ia,nonIa (train only)
 
     # read mean filter wavelengths
     if mode == MODE_PREDICT :
@@ -130,12 +132,14 @@ def load_lcdata_metadata(config):
     config[key_lcdata] = []
     n_load = 0
 
+    first_data_path = None # needed below to determine sim or real data
 
     if key_path in config:
         for data_path in config[key_path]:
             data_path = os.path.expandvars(data_path)
             version   = os.path.basename(data_path)
             list_file = f"{data_path}/{version}.LIST" 
+            if not first_data_path : first_data_path = data_path
             with open(list_file,"rt") as l:
                 meta_list = l.readlines()
                 for meta in meta_list:
@@ -149,6 +153,14 @@ def load_lcdata_metadata(config):
 
         logging.info(f"Stored path for {n_load} PHOT.FITS files (lcdata_paths).")
         logging.info(f"Stored path for {n_load} HEAD.FITS files (meta_paths).")
+
+    # - - - - -
+    # Feb 2026: determine real or sim data 
+    is_data = util.is_data_real(first_data_path)
+    is_sim  = not is_data
+    config['is_data'] = is_data
+    config['is_sim']  = is_sim
+    logging.info(f"is_data={is_data}  |  is_sim={is_sim}")
 
     return
 
@@ -450,11 +462,12 @@ if __name__ == "__main__":
         # write done stamp for higher level pipeline
         write_done_file(config, donefile_info)  
 
-        # tar up summary files; then remove them to cleanup
-        util.compress_files(+1, config['heatmaps_path'], heatmap_summary_wildcard,
-                       "heatmap_summaries", "" )
+        heatmaps_path = config['heatmaps_path']
+        util.compress_files(+1, heatmaps_path, heatmap_summary_wildcard,
+                            "heatmap_summaries", "" )
 
-        util.compress_files(+1, config['heatmaps_path'], "create_heatmaps*",
-                       "create_heatmaps", "" )
+        if len( glob.glob1(heatmaps_path, create_heatmap_wildcard) ) > 0:  # these files are optional
+            util.compress_files(+1, heatmaps_path, create_heatmap_wildcard,
+                                "create_heatmaps", "" )
 
     # === END MAIN ===
