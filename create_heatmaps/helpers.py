@@ -116,6 +116,10 @@ def read_fits(fname_phot, sn_type_id_to_name, survey_from_config, drop_separator
     survey = survey_from_config if survey_from_config else metadata_hdu[0].header["SURVEY"]
 
     header = Table.read(fname_head, format="fits")
+
+    # Apr 21 2026 R.kessler - drop the HOSTGALz vector columns that break pandas    
+    remove_vector_columns(header)
+
     df_header = header.to_pandas()
     df_header["SNID"] = df_header["SNID"].astype(np.int32)
 
@@ -182,6 +186,28 @@ def read_fits(fname_phot, sn_type_id_to_name, survey_from_config, drop_separator
     #sys.exit(f"\n xxx modified lcdata = \n{lcdata}")
 
     return df_header, lcdata, survey
+
+def remove_vector_columns(table):
+
+    # created Apr 21 2026 by R.Kessler
+    # remove vector-float columns that cannot be converted to pandas df.
+    # This removes the new HOSTGALz_XXX and HOSTGAL2z_XXX vector columns.
+
+    cols_to_remove = []
+    for col_name in table.colnames:
+        col = table[col_name]
+        # Check if it's a float type AND has more than 1 dimension
+        if np.issubdtype(col.dtype, np.floating) and col.ndim > 1:
+            cols_to_remove.append(col_name)
+            #print(f"Vector Float Column Found: {col_name}, Shape: {col.shape}")
+
+    if len(cols_to_remove) > 0:
+        logging.info("")
+        logging.info(f"Remove vector columns that break pandas: {cols_to_remove}")
+        logging.info("")
+        table.remove_columns(cols_to_remove)
+
+    return
 
 def build_gp(guess_length_scale, sn_data, bands):
     """This is  all  taken from Avacado -
