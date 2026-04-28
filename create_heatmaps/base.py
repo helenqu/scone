@@ -83,7 +83,7 @@ class CreateHeatmapsBase(abc.ABC):
                 logging.info(" file has already been processed, exiting")
                 sys.exit(0)
                 
-        self.metadata, self.lcdata, survey = \
+        self.metadata, self.lcdata, survey, self.zp_fluxcal = \
                 read_fits(self.lcdata_path, self.sn_type_id_to_name, self.survey)
 
         n_lcdata = len(self.lcdata)

@@ -114,6 +114,10 @@ def read_fits(fname_phot, sn_type_id_to_name, survey_from_config, drop_separator
     # load header
     metadata_hdu = fits.open(fname_head)
     survey = survey_from_config if survey_from_config else metadata_hdu[0].header["SURVEY"]
+    ZP_FLUXCAL_DEFAULT = 27.5
+    zp_fluxcal = metadata_hdu[0].header.get("ZP_FLUXCAL", ZP_FLUXCAL_DEFAULT)
+    if zp_fluxcal == ZP_FLUXCAL_DEFAULT:
+        logging.warning(f"ZP_FLUXCAL not found in {os.path.basename(fname_head)} header; using default {ZP_FLUXCAL_DEFAULT}")
 
     header = Table.read(fname_head, format="fits")
 
@@ -185,7 +189,7 @@ def read_fits(fname_phot, sn_type_id_to_name, survey_from_config, drop_separator
     lcdata['passband']  = [ s.strip()[-1:] for s in lcdata['passband']]  
     #sys.exit(f"\n xxx modified lcdata = \n{lcdata}")
 
-    return df_header, lcdata, survey
+    return df_header, lcdata, survey, zp_fluxcal
 
 def remove_vector_columns(table):
 
