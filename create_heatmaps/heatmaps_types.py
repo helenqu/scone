@@ -194,7 +194,7 @@ class MagById(CreateHeatmapsBase):
                 if len(sn_lcdata_r) == 0:
                     continue
                 last_r_flux = sn_lcdata_r['flux'][-1]
-                last_r_mag = 27.5 - 2.5*np.log10(last_r_flux)
+                last_r_mag = self.zp_fluxcal - 2.5*np.log10(last_r_flux)
                 if last_r_mag <= 20:
                     mag_by_id[int(mjdmax)].append(int(sn_id))
 
