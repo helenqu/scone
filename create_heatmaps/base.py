@@ -5,6 +5,8 @@
 # Jan 29 2026: 
 #   + include heatmap PROCESS_RATE (number per minute) in heatmap-summary files
 #   + open START_TIME_STAMP.TXT file
+# Nov 05 2026: correct GP flux and uncertainty for Milky Way extinction by 10**(0.4*A_lambda)
+#             instead of adding A_lambda to the flux; legacy_extinction config key keeps the old way
 
 import numpy as np
 import pandas as pd
@@ -37,6 +39,7 @@ class CreateHeatmapsBase(abc.ABC):
         self.wavelength_bins = config["num_wavelength_bins"]
         self.mjd_bins        = config["num_mjd_bins"]
         self.has_peakmjd     = config.get("has_peakmjd", True)
+        self.legacy_extinction = config.get("legacy_extinction", False)
 
         # load info from sim-readme that has been appended to config (4.3.2024, RK)
         self.SIM_GENTYPE_TO_CLASS = config.setdefault("SIM_GENTYPE_TO_CLASS",{}) 
@@ -437,7 +440,12 @@ class CreateHeatmapsBase(abc.ABC):
         time_wavelength_grid = np.transpose([np.tile(times, len(wavelengths)), np.repeat(wavelengths, len(times))])
 
         predictions, prediction_vars = gp(time_wavelength_grid, return_var=True)
-        ext_corrected_predictions = np.array(predictions).reshape(32, 180) + ext
+        predictions = np.array(predictions).reshape(32, 180)
         prediction_uncertainties = np.sqrt(prediction_vars).reshape(32, 180)
 
-        return ext_corrected_predictions, prediction_uncertainties
+        if self.legacy_extinction:
+            return predictions + ext, prediction_uncertainties
+
+        # ext is A_lambda in magnitudes; extinction dims the flux by 10**(-0.4*A_lambda)
+        factor = 10 ** (0.4 * ext)
+        return predictions * factor, prediction_uncertainties * factor
