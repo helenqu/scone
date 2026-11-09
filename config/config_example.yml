@@ -13,6 +13,9 @@ output_path: "/path/to/output/dir" # location of desired output directory for id
 # HEATMAP WIDTH: mjd_range / mjd_interval. mjd_range=180 (peak_mjd-50 -> peak_mjd+130), set in create_heatmaps.py
 num_wavelength_bins: 32
 num_mjd_bins: 180
+# Milky Way extinction scales the GP flux by 10^(0.4 A_lambda). Uncomment to add A_lambda to the flux instead,
+# as SCONE did before this was fixed: needed for making heatmaps for models trained before the fix.
+# legacy_extinction: True
 
 ### CLASS BALANCING ###
 # 0.5 for class-balanced binary split
