@@ -28,6 +28,9 @@
 #    in the heatmaps output directory so users can do fast SNID lookups during
 #    visualization without scanning all TFRecord files.
 #
+# Nov 21 2026 RK - in anticipation of numpy (npz) tables, update read_select_file
+#                  to read either npz or csv-text into data frame. NOT TESTED.
+#
 
 import os, sys, yaml, shutil, gzip
 import argparse, subprocess
@@ -143,12 +146,7 @@ def create_snid_select_file(config):
                          f"{select_file}")
             continue
         
-        if '.gz' in select_file:
-            df = pd.read_csv(select_file, compression='gzip', 
-                             comment="#", delim_whitespace=True)
-        else:
-            df = pd.read_csv(select_file,
-                             comment="#", delim_whitespace=True)
+        df = read_select_file(select_file)
 
         n_df_tot = len(df)
 
@@ -265,6 +263,46 @@ def create_snid_select_file(config):
     f.close()
 
     return n_select
+
+def read_select_file(select_file):
+
+    # created Nov 21 2026 by R.Kessler
+    # Read user-input select_file into pandas df.
+    # Check if csv-text or npz.
+
+    is_npz = '.npz' in select_file.lower()
+    is_gz  = '.gz.' in select_file
+
+    if is_npz:
+        # This part is written by Claude:
+        # NPZ file is a dictionary of 1D arrays (one per column), all with same length.
+        # allow_pickle=False for safety; fixed-width byte strings (e.g., CID, FIELD)
+        # are loaded as bytes and are converted to str here (before making df,
+        # since pandas stores bytes arrays as generic objects).
+        data = {}
+        with np.load(select_file, allow_pickle=False) as npz:
+            for key in npz.files:
+                arr = npz[key]
+                if arr.dtype.kind == 'S':
+                    arr = np.char.decode(arr, 'utf-8')
+                data[key] = arr
+
+        df = pd.DataFrame(data)
+
+        # csv-text path gives integer CIDs if all are numeric; do the same here
+        # so that the NPZ and csv-text options behave the same downstream.
+        if 'CID' in df.columns:
+            try:
+                df['CID'] = pd.to_numeric(df['CID'])
+            except (ValueError, TypeError):
+                pass   # non-numeric CIDs: keep as str
+    else:
+        # This part written by R.Kessler
+        compress = 'gzip' if is_gz   else None
+        df = pd.read_csv(select_file, compression=compress, 
+                         comment="#", delim_whitespace=True)
+
+    return df
 
 
 def check_duplicates(is_data, snid_all_list, gentype_all_list, config):
