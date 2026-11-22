@@ -271,7 +271,7 @@ def read_select_file(select_file):
     # Check if csv-text or npz.
 
     is_npz = '.npz' in select_file.lower()
-    is_gz  = '.gz.' in select_file
+    is_gz  = '.gz'  in select_file
 
     if is_npz:
         # This part is written by Claude:
