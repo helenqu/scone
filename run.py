@@ -30,9 +30,12 @@
 #
 # Nov 21 2026 RK - in anticipation of numpy (npz) tables, update read_select_file
 #                  to read either npz or csv-text into data frame. NOT TESTED.
+# Nov 23 2026 RK - use_select_file: for npz tables, read VERSION_PHOTOMETRY from the
+#                  json header stored as the zip-archive comment (written by snlc_fit.exe);
+#                  opening an npz as text crashed with UnicodeDecodeError.
 #
 
-import os, sys, yaml, shutil, gzip
+import os, sys, yaml, shutil, gzip, json, zipfile
 import argparse, subprocess
 from astropy.table import Table
 import numpy as np
@@ -271,7 +274,7 @@ def read_select_file(select_file):
     # Check if csv-text or npz.
 
     is_npz = '.npz' in select_file.lower()
-    is_gz  = '.gz' in select_file
+    is_gz  = '.gz'  in select_file
 
     if is_npz:
         # This part is written by Claude:
@@ -365,39 +368,63 @@ def use_select_file(is_sim, select_file, sim_version_list):
     if not is_sim: return True
 
     # if simgen-dump file, always return True
-    suffix = select_file.split('.')[1]
-    if 'DUMP' in suffix: return True
+    # (use basename so that dots in directory names don't confuse the suffix)
+    suffix = os.path.basename(select_file).split('.')[1:]
+    if any('DUMP' in s for s in suffix): return True
 
-    # open select_file for reading
-    if '.gz' in select_file:
-        f = gzip.open(select_file,"rt")
+    if is_npz_file(select_file):
+        # npz table: header is a json dictionary stored as the zip-archive comment
+        select_version = read_npz_header(select_file).get('VERSION_PHOTOMETRY')
+        if select_version is None:
+            msgerr = f'\n\nERROR: could not find VERSION_PHOTOMETRY key in ' \
+                     f'npz header of select file \n{select_file}'
+            assert False,  msgerr
+        select_version_list = [ v.strip() for v in select_version.split(',') ]
     else:
-        f = open(select_file,"rt")
+        # open select_file for reading
+        if '.gz' in select_file:
+            f = gzip.open(select_file,"rt")
+        else:
+            f = open(select_file,"rt")
 
-    NLINE_ABORT = 10
-    KEY = "VERSION_PHOTOMETRY:"
-    for i, line in enumerate(f):
-        if i >= NLINE_ABORT:
-            msgerr = f'\n\nERROR: could not find {KEY} key in first {i} lines\n' \
-                     f'in select file {select_file}'
-            assert False,  msgerr 
+        NLINE_ABORT = 10
+        KEY = "VERSION_PHOTOMETRY:"
+        for i, line in enumerate(f):
+            if i >= NLINE_ABORT:
+                msgerr = f'\n\nERROR: could not find {KEY} key in first {i} lines\n' \
+                         f'in select file {select_file}'
+                assert False,  msgerr 
             
-        if KEY in line:
-            wdlist = line.split()
-            j      = wdlist.index(KEY)
-            select_version = wdlist[j+1]
-            select_version_list = select_version.split(',') # could be comma sep list
-            break
+            if KEY in line:
+                wdlist = line.split()
+                j      = wdlist.index(KEY)
+                select_version = wdlist[j+1]
+                select_version_list = select_version.split(',') # could be comma sep list
+                break
+        f.close()
         
     # - - - - - - - - - - - -
     use = False
     for select_version in select_version_list:
         if select_version in sim_version_list:
             use = True
-            
-    f.close()
         
     return use
+
+def is_npz_file(select_file):
+    # same test used in read_select_file
+    return '.npz' in select_file.lower()
+
+def read_npz_header(npz_file):
+    # Nov 23 2026
+    # Return header dictionary stored by snlc_fit.exe as a json string in the
+    # zip-archive comment of the npz file. Values are blank-padded strings,
+    # so strip them. Returns empty dict if there is no header.
+    comment = zipfile.ZipFile(npz_file).comment
+    if len(comment) == 0:
+        return {}
+    hdr = json.loads(comment.decode('utf-8'))
+    return { key: str(val).strip() for key, val in hdr.items() }
 
 
 def n_per_class(gentype_list,SIM_GENTYPE_TO_CLASS):
