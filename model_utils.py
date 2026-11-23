@@ -458,13 +458,31 @@ class SconeClassifier():
         
         return accuracy_dict
 
+    def use_npz_predict_file(self):
+        # Nov 23 2026 RK
+        # Return True if predictions should be written as npz instead of csv-text.
+        # npz is used only if snid_select_files is given and every file is npz;
+        # if the key is absent/empty, or any file is csv-text (.gz), use csv-text.
+        select_files = self.scone_config.get('snid_select_files', None)
+        if not select_files:
+            return False
+        if isinstance(select_files, str):
+            select_files = [ select_files ]
+        return all( '.npz' in f.lower() for f in select_files )
+
     def write_predict_csv_file(self, predict_dict):
 
         # Created Apr 4 2024 by R.Kessler
         # write predictions to csv file.
         # Feb 13 2026: check config override for predict file name;
         #              initial need is to avoid collision in  regression tests
+        # Nov 23 2026: if snid_select_files are npz, write predictions.npz
+        #              (see write_predict_npz_file) instead of predictions.csv
         #
+
+        if self.use_npz_predict_file():
+            self.write_predict_npz_file(predict_dict)
+            return
         
         predict_base = PREDICT_CSV_FILE_BASE  # default
         if 'output_predict_file' in self.scone_config :  # optional config override 
@@ -486,6 +504,35 @@ class SconeClassifier():
             predictions.to_csv(predict_file, index=False)
             logging.info(f"SCONE prediction file: {predict_file}")            
 
+        return
+
+    def write_predict_npz_file(self, predict_dict):
+
+        # Created Nov 23 2026 by R.Kessler
+        # Same content as the csv-text file (columns snid and prob_column_name),
+        # but stored as a dictionary of 1D arrays in a numpy npz file.
+        # Default name is predictions.npz; if output_predict_file is given,
+        # use it, replacing a .csv suffix with .npz.
+
+        predict_base = PREDICT_NPZ_FILE_BASE  # default
+        if 'output_predict_file' in self.scone_config :  # optional config override
+            predict_base = self.scone_config['output_predict_file']
+            if predict_base.lower().endswith('.csv'):
+                predict_base = predict_base[:-4] + '.npz'
+        predict_file = os.path.join(self.output_path, predict_base)
+
+        snid = np.asarray(predict_dict['snid'])
+        if snid.dtype.kind in ('S', 'O'):
+            # bytes/object -> str; then fixed-width unicode (no pickle needed to load)
+            snid = np.array([ x.decode('utf-8') if isinstance(x, bytes) else str(x)
+                              for x in snid ])
+        prob = np.asarray(predict_dict['pred_labels']).flatten()
+
+        # np.savez appends .npz if missing, so pass an open file to keep exact name
+        with open(predict_file, 'wb') as f:
+            np.savez(f, **{ 'snid': snid, self.prob_column_name: prob })
+
+        logging.info(f"SCONE prediction file: {predict_file}")
         return
 
     def _print_report_and_save_history(self, history):
