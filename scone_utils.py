@@ -33,6 +33,7 @@ HEATMAPS_SNID_SELECT_FILE  = "snid_select.hdf5"  # optional, produced by run_ref
 # define a few standard base file names (full path determined by user or pippin)
 SBATCH_DONE_FILE_BASE = "done.txt"
 PREDICT_CSV_FILE_BASE = "predictions.csv"
+PREDICT_NPZ_FILE_BASE = "predictions.npz"
 
 FILTER_WAVE_FILE = "filter_mean_wavelength.dat"  # to store <wave> vs. band
 KEY_BAND_TO_WAVE = 'band_to_wave'
