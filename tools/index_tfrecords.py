@@ -11,9 +11,14 @@ Usage:
 
     # Then visualize using the index (no full scan needed)
     python visualize_tfrecords.py --tfrecord heatmaps/ --index snid_index.csv.gz --sample_ids 1009,1521,2034
+
+ Nov 25 2026 RK 
+   + use logger to print and add timer. If time is long (e.g. for BCOR),
+     might move this funcionality into create_heatmaps to be much more efficient.
+
 """
 
-import os
+import os, sys, time
 import warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
@@ -67,12 +72,23 @@ def build_index(tfrecord_files, output_csv):
                 file_count += 1
 
             total_records += file_count
-            print(f"  [{i+1}/{len(tfrecord_files)}] {Path(tfrecord_file).name}: {file_count} records")
+            logging.info(f"  [{i+1}/{len(tfrecord_files)}] {Path(tfrecord_file).name}: {file_count} records")
 
-    print(f"\nIndexed {total_records} records from {len(tfrecord_files)} files -> {output_csv}")
+    # - - - -
+    logging.info(f"")
+    logging.info(f"Indexed {total_records} records from {len(tfrecord_files)} heatmap files")
+    logging.info(f"Wrote {output_csv}")
+
+def setup_logging():
+    logging.basicConfig(level=logging.INFO,
+                        format="[%(levelname)6s |%(filename)15s] %(message)s")
 
 
-def main():
+def get_args():
+
+    # created Nov 25 2026 by R.Kessler
+    # Cleanup main, and expandvars for input paths.
+
     parser = argparse.ArgumentParser(description='Build a SNID->tfrecord CSV index')
     parser.add_argument('--tfrecord', required=True,
                         help='Directory containing *.tfrecord files')
@@ -80,21 +96,41 @@ def main():
                         help='Output CSV file (default: snid_index.csv.gz)')
     args = parser.parse_args()
 
+    args.tfrecord = os.path.expandvars(args.tfrecord)
+    args.output   = os.path.expandvars(args.output)
+
+    return args
+
+# ================================
+
+def main():
+
+    setup_logging()
+
+    logging.info(f'')
+    logging.info(f'Begin {sys.argv[0]}')
+    t_start = time.time()
+
+    args = get_args()
+
     tfrecord_path = Path(args.tfrecord)
     if not tfrecord_path.is_dir():
-        print(f"Error: {tfrecord_path} is not a directory")
+        logging.info(f"Error: {tfrecord_path} is not a directory")
         return
 
     tfrecord_files = sorted(str(f) for f in tfrecord_path.glob('*.tfrecord'))
     if not tfrecord_files:
-        print(f"No .tfrecord files found in {tfrecord_path}")
+        logging.info(f"ERROR: no .tfrecord files found in {tfrecord_path}")
         return
 
-    print(f"Found {len(tfrecord_files)} tfrecord files in {tfrecord_path}")
-    print(f"Building index (image data skipped for speed)...\n")
+    logging.info(f"Found {len(tfrecord_files)} tfrecord files in {tfrecord_path}")
+    logging.info(f"Building index (image data skipped for speed)...\n")
 
     build_index(tfrecord_files, args.output)
 
+    # - - -
+    t_elapse = (time.time() - t_start)/60.0
+    logging.info(f"Finished buidling index list in {t_elapse:.2f} minutes")
 
 if __name__ == '__main__':
     main()
